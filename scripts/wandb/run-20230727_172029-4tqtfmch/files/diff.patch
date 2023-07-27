@@ -1,0 +1,672 @@
+diff --git a/.DS_Store b/.DS_Store
+index 400b762..b46d2d1 100644
+Binary files a/.DS_Store and b/.DS_Store differ
+diff --git a/evtGAN/.DS_Store b/evtGAN/.DS_Store
+index 2bb524c..c7dc632 100644
+Binary files a/evtGAN/.DS_Store and b/evtGAN/.DS_Store differ
+diff --git a/evtGAN/DCGAN.py b/evtGAN/DCGAN.py
+index b2e0bb5..0a19398 100644
+--- a/evtGAN/DCGAN.py
++++ b/evtGAN/DCGAN.py
+@@ -31,7 +31,7 @@ def process_adam_from_config(config):
+ 
+ def compile_dcgan(config, loss_fn=cross_entropy, nchannels=2):
+     adam_kwargs = process_adam_from_config(config)
+-    d_optimizer = Adam(**adam_kwargs) # RMSprop(learning_rate=0) # 
++    d_optimizer = Adam(**adam_kwargs) # RMSprop(learning_rate=0) #
+     g_optimizer = Adam(**adam_kwargs) # RMSprop(learning_rate=0)
+     dcgan = DCGAN(config, nchannels=nchannels)
+     dcgan.compile(d_optimizer=d_optimizer, g_optimizer=g_optimizer, loss_fn=loss_fn)
+@@ -133,7 +133,6 @@ class DCGAN(keras.Model):
+         return self.generator(random_latent_vectors, training=False)
+ 
+     def train_step(self, data):
+-        tf.print(f"\n\nStart of train step:", self.generator.trainable_variables[0][0], "\n\n")
+         batch_size = tf.shape(data)[0]
+         random_latent_vectors = tf.random.normal((batch_size, self.latent_dim))
+         fake_data = self.generator(random_latent_vectors, training=False)
+@@ -150,8 +149,7 @@ class DCGAN(keras.Model):
+                 d_loss = d_loss_real + d_loss_fake
+             grads = tape.gradient(d_loss, self.discriminator.trainable_weights)
+             self.d_optimizer.apply_gradients(zip(grads, self.discriminator.trainable_weights))
+-        
+-        tf.print(f"\n\nAfter discriminator training:", self.generator.trainable_variables[0][0])
++
+         # sample random points in the latent space (again)
+         random_latent_vectors = tf.random.normal((batch_size, self.latent_dim))
+         misleading_labels = tf.ones((batch_size, 1))  # i.e., want to trick discriminator
+@@ -164,9 +162,7 @@ class DCGAN(keras.Model):
+             g_penalty = self.lambda_ * get_chi_score(data, generated_data, sample_size=tf.constant(25))
+             g_loss = g_loss_raw #+ g_penalty
+         grads = tape.gradient(g_loss, self.generator.trainable_weights)
+-        tf.print(f"Before updating generator weights:", self.generator.trainable_variables[0][0])
+         self.g_optimizer.apply_gradients(zip(grads, self.generator.trainable_weights))
+-        tf.print(f"After updating generator weights:", self.generator.trainable_variables[0][0], "\n\n")
+ 
+         # update metrics and return their values
+         self.d_loss_real_tracker.update_state(d_loss_real)
+diff --git a/evtGAN/config-defaults.yaml b/evtGAN/config-defaults.yaml
+deleted file mode 100644
+index 2ef0722..0000000
+--- a/evtGAN/config-defaults.yaml
++++ /dev/null
+@@ -1,56 +0,0 @@
+-# training settings
+-nepochs:
+-  value: 7500
+-train_size:
+-  value: 200
+-batch_size:
+-  value: 50
+-chi_frequency:
+-  desc: How often to calculate chi-score for train and test.
+-  value: 5
+-seed:
+-  value: 2
+-
+-# training features
+-lambda_:
+-  value: 0.1
+-training_balance:
+-  desc: How many more times to train discriminator than generator.
+-  value: 2
+-true_label_smooth:
+-  desc: Multiply true labels by this to smooth discriminator's labels.
+-  value: 0.9
+-
+-# architecture
+-lrelu:
+-  value: 0.308623096408301
+-dropout:
+-  value: 0.17212992990721143
+-latent_dims:
+-  value: 100
+-g_layers:
+-  desc: Number of channels in the hidden layers for the generator.
+-  value: [25600, 512, 256]
+-d_layers:
+-  desc: Number of channels in the hidden layers for the discriminator.
+-  value: [64, 128, 256]
+-
+-
+-# Adam parameters
+-learning_rate:
+-  value: 0.00033311627536622494
+-beta_1:
+-  value: 0.5968270381256018
+-beta_2:
+-  value: 0.999
+-clipnorm:
+-  value:
+-global_clipnorm:
+-  value:
+-use_ema:
+-  value: True
+-ema_momentum:
+-  value: 0.9
+-ema_overwrite_frequency:
+-  desc: How often to overwrite weights with ema.
+-  value: 1
+diff --git a/evtGAN/tf_utils.py b/evtGAN/tf_utils.py
+index b90a5a9..5857ab4 100644
+--- a/evtGAN/tf_utils.py
++++ b/evtGAN/tf_utils.py
+@@ -1,9 +1,10 @@
+ """Helper functions for running evtGAN in TensorFlow."""
+-
++import os
+ import random
+ import numpy as np
+ import pandas as pd
+ import tensorflow as tf
++from scipy.stats import genextreme
+ import matplotlib.pyplot as plt
+ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+ from scipy.stats import gaussian_kde
+@@ -20,36 +21,23 @@ def tf_unpad(tensor, paddings):
+     unpaddings = [slice(pad.numpy()[0], -pad.numpy()[1]) if sum(pad.numpy()>0)  else slice(None, None) for pad in paddings]
+     return tensor[unpaddings]
+ 
++def fit_gev(dataset):
++    """Fit GEV to dataset. Takes a while for large datasets."""
++    m = dataset.shape[1]
++    params = [genextreme.fit(dataset[..., j]) for j in range(m)]
++    return params
+ 
+-def marginal(dataset):
+-    a = ecdf(dataset)
+-    J = np.shape(a)[1]
+-    n = np.shape(a)[0]
+-    z = n * (-1)
+-    for j in range(J):
+-        if np.sum(a[:, j]) == z:
+-            a[:, j] = np.zeros(np.shape(a[:, j])[0])
+-    return a
+-
+-
+-def ecdf(dataset):
+-    return rank(dataset) / (len(dataset) + 1)
+-# NOTE: (tf_utils.ecdf(train_set) == tf_utils.marginal(train_set)).all() is true usually
+-
+-
+-def rank(dataset):
+-    ranked = np.empty(np.shape(dataset))
+-    for j in range(np.shape(ranked)[1]):
+-        if all(i == dataset[0,j] for i in dataset[:,j]):
+-            ranked[:,j] = len(ranked[:,j]) / 2 + 0.5
+-        else:
+-            array = dataset[:,j]
+-            temp = array.argsort()
+-            ranks = np.empty_like(temp)
+-            ranks[temp] = np.arange(len(array))
+-            ranked[:,j] = ranks + 1
+-    return ranked
++def gev_marginals(dataset, params):
++    """Transform dataset to marginals of generalised extreme value distribution."""
++    m = dataset.shape[1]
++    marginals = np.array([genextreme.cdf(dataset[..., j], *params[j]) for j in range(m)]).T
++    return marginals
+ 
++def gev_quantiles(marginals, params):
++    """Transform marginals of generalised extreme value distribution to original scale."""
++    m = marginals.shape[1]
++    quantiles = np.array([genextreme.ppf(marginals[..., j], *params[j]) for j in range(m)]).T
++    return quantiles
+ 
+ def get_ec_variogram(x, y):
+     """Extremal correlation by variogram as in §2.1."""
+@@ -120,279 +108,54 @@ def raw_extremal_correlation(frechet_x, frechet_y):
+ 
+ ########################################################################################################
+ 
+-
+-def plot_sample_density(data, reference_data, ax, celcius=True, sample_pixels=None):
+-    """For generated quantiles."""
+-    h, w = data.shape[1:3]
+-    n = h * w
+-
+-    if sample_pixels is None:
+-        sample_pixels_x = random.sample(range(n), 1)
+-        sample_pixels_y = random.sample(range(n), 1)
+-    else:
+-        assert sample_pixels[0] != sample_pixels[1]
+-        sample_pixels_x = [sample_pixels[0]]
+-        sample_pixels_y = [sample_pixels[1]]
+-
+-    data_ravel = tf.reshape(data, [len(data), n])
+-
+-    sample_x = tf.gather(data_ravel, sample_pixels_x, axis=1)
+-    sample_y = tf.gather(data_ravel, sample_pixels_y, axis=1)
+-
+-    frechet_x = -tf.math.log(1 - sample_x)
+-    frechet_y = -tf.math.log(1 - sample_y)
+-
+-    ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
+-
+-    # transform to original data and Celcius and plot
+-    sample_x = np.quantile(reference_data, sample_x)
+-    sample_y = np.quantile(reference_data, sample_y)
+-
+-    if celcius:
+-        sample_x = kelvinToCelsius(sample_x)
+-        sample_y = kelvinToCelsius(sample_y)
+-
+-    scatter_density(sample_x, sample_y, ax, title=f'$\chi$: {ec_xy:4f}')
+-
+-
+-def scatter_density(x, y, ax, title=''):
+-    xy = np.hstack([x, y]).transpose()
+-    z = gaussian_kde(xy)(xy)
+-    idx = z.argsort()
+-    x, y, z = x[idx], y[idx], z[idx]
+-    ax.scatter(x, y, c=z, s=10)
+-    ax.set_title(title)
+-    return ax
+-
+-
+-def load_for_tf(root, paddings, n_train, output_size=None):
+-    df_train_test = pd.read_csv(root, sep=',',header=None).iloc[1:]
+-
+-    #Load data and view
+-    plt.figure(figsize=(15, 3))
+-    plt.plot(range(2000), df_train_test.iloc[0,:].values.astype(float), linewidth=.5, color='k')
+-    plt.ylabel('Temperature (K)')
+-    plt.title('Time series for single pixel')
+-    plt.show()
+-
+-    df_train_test = df_train_test.values.astype(float).transpose()
+-    n = df_train_test.shape[0]
+-
+-    #train set: need to standardise it separately (as df is ... but then split)
+-    train_set = df_train_test[:n_train,:]
+-
+-    #valid set: need to standardise it separately (as df is ... but then split)
+-    test_set = df_train_test[n_train:,:]
+-
+-    train = tf.convert_to_tensor(train_set, dtype='float32')
+-    train = tf.reshape(train, (n_train, 18, 22, 1))
+-    if output_size is not None:
+-        train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+-#     train = tf.pad(train, paddings)
+-
+-    test = tf.convert_to_tensor(test_set, dtype='float32')
+-    test = tf.reshape(test, (n - n_train, 18, 22, 1))
+-    if output_size is not None:
+-        test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+-
+-    fig, axs = plt.subplots(1, 5, figsize=(15, 3))
+-    for i, ax in enumerate(axs):
+-        im = ax.imshow(train[i, :, :, 0].numpy())
+-    plt.suptitle('Training data (original scale)')
+-    divider = make_axes_locatable(ax)
+-    cax = divider.append_axes('right', size='5%', pad=0.05)
+-    fig.colorbar(im, cax=cax, orientation='vertical')
+-
+-    return train, test
+-
+-
+-def load_and_scale_for_tf(root, paddings, n_train, output_size=None):
+-    df_train_test = pd.read_csv(root, sep=',',header=None).iloc[1:]
+-
+-    #Load data and view
+-    plt.figure(figsize=(15, 3))
+-    plt.plot(range(2000), df_train_test.iloc[0, :].values.astype(float), linewidth=.5, color='k')
+-    plt.ylabel('Temperature (K)')
+-    plt.title('Time series for single pixel')
+-    plt.show()
+-
+-    df_train_test = df_train_test.values.astype(float).transpose()
+-    n = df_train_test.shape[0]
+-
+-    #train set: need to standardise it separately (as df is ... but then split)
+-    train_set = df_train_test[:n_train,:]
+-    train_set = marginal(train_set)
+-
+-    #valid set: need to standardise it separately (as df is ... but then split)
+-    test_set = df_train_test[n_train:,:]
+-    test_set = marginal(test_set)
+-
+-    train = tf.convert_to_tensor(train_set, dtype='float32')
+-    train = tf.reshape(train, (n_train, 18, 22, 1))
+-    if output_size is not None:
+-        train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+-    train = tf.pad(train, paddings)
+-
+-    test = tf.convert_to_tensor(test_set, dtype='float32')
+-    test = tf.reshape(test, (n - n_train, 18, 22, 1))
+-    if output_size is not None:
+-        test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+-    test = tf.pad(test, paddings)
+-
+-    fig, axs = plt.subplots(1, 5, figsize=(15, 3))
+-    for i, ax in enumerate(axs):
+-        im = ax.imshow(train[i, :, :, 0].numpy())
+-    plt.suptitle('Training data (scaled)')
+-    divider = make_axes_locatable(ax)
+-    cax = divider.append_axes('right', size='5%', pad=0.05)
+-    fig.colorbar(im, cax=cax, orientation='vertical')
+-
+-    return train, test
+-
+-
+-def load_era5_for_tf(indir, n_train, output_size=(17, 21), conditions='normal', viz=True):
+-    """Load ERA5 data from supplied directories.
+-
+-    Parameters:
+-    -----------
+-    indir : string
+-    n_train : int
+-    output_size : tuple of ints, default=(17, 21)
+-    conditions : string, default='normal'
+-    viz : bool, default=True
+-    """
+-    df = pd.read_csv(indir)
+-    if conditions == 'normal':
+-        df = df[~df['cyclone_flag']]
+-    elif conditions == 'cyclone':
+-        df = df[df['cyclone_flag']]
+-    elif conditions == 'all':
+-        pass
+-    else:
+-        raise Exception("condition must be one of ['normal', 'cyclone', 'all']")
+-    df = df.drop(columns=['cyclone_flag', 'time'])
+-
+-    n = df.shape[1]
+-
+-    #Load data and view
+-    if viz:
+-        plt.figure(figsize=(15, 3))
+-        plt.plot(range(n), df.iloc[0, :].values.astype(float), linewidth=.5, color='k')
+-        plt.ylabel('Wind u10 (mps)')
+-        plt.title('Time series for single pixel')
+-        plt.show()
+-
+-    df = df.values.astype(float)
+-
+-    n = df.shape[0]
+-    print(f"Dataset has {n} entries.")
+-    assert n_train < n, f"Requested train size ({n_train}) exceeds size of dataset ({n})."
+-
+-    train_set = df[:n_train,:]
+-    test_set = df[n_train:,:]
+-
+-    train = tf.convert_to_tensor(train_set, dtype='float32')
+-    train = tf.reshape(train, (n_train, 61, 61, 1))
+-
+-    if output_size is not None:
+-        train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+-
+-    test = tf.convert_to_tensor(test_set, dtype='float32')
+-    test = tf.reshape(test, (n - n_train, 61, 61, 1))
+-    if output_size is not None:
+-        test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+-
+-    if viz:
+-        fig, axs = plt.subplots(1, 5, figsize=(15, 3))
+-        for i, ax in enumerate(axs):
+-            im = ax.imshow(train[i, :, :, 0].numpy())
+-        plt.suptitle('Training data (original scale)')
+-        divider = make_axes_locatable(ax)
+-        cax = divider.append_axes('right', size='5%', pad=0.05)
+-        fig.colorbar(im, cax=cax, orientation='vertical')
+-
+-    return train, test
+-
+-
+-
+-def load_and_scale_era5_for_tf(indir, paddings, n_train, output_size = (17, 21), conditions='normal', viz=False):
+-
+-    df = pd.read_csv(indir)
+-    if conditions == 'normal':
+-        df = df[~df['cyclone_flag']]
+-    elif conditions == 'cyclone':
+-        df = df[df['cyclone_flag']]
+-    elif conditions == 'all':
+-        pass
+-    else:
+-        raise Exception("condition must be one of ['normal', 'cyclone', 'all']")
+-
+-    df = df.drop(columns=['cyclone_flag', 'time'])
+-    n = df.shape[1]
+-
+-    #Load data and view
+-    if viz:
+-        plt.figure(figsize=(15, 3))
+-        plt.plot(range(n), df.iloc[0, :].values.astype(float), linewidth=.5, color='k')
+-        plt.ylabel('Wind u10 (mps)')
+-        plt.title('Time series for single pixel')
+-        plt.show()
+-
+-    df = df.values.astype(float)
+-
+-    n = df.shape[0]
+-    print(f"Dataset has {n} entries.")
+-    assert n_train < n, f"Requested train size ({n_train}) exceeds size of dataset ({n})."
+-
+-    train_set = df[:n_train,:]
+-    train_set = marginal(train_set)
+-    test_set = df[n_train:,:]
+-    test_set = marginal(test_set)
+-
+-    train = tf.convert_to_tensor(train_set, dtype='float32')
+-    train = tf.reshape(train, (n_train, 61, 61, 1))
+-
+-    if output_size is not None:
+-        train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
++def load_marginals(indir, conditions="all", dim="u10", output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
++    cyclone_marginals_train = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_train.npy"))
++    normal_marginals_train = np.load(os.path.join(indir, f"normal_marginals_{dim}_train.npy"))
++    cyclone_marginals_test = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_test.npy"))
++    normal_marginals_test = np.load(os.path.join(indir, f"normal_marginals_{dim}_test.npy"))
++
++    if conditions == "all":
++        train = np.vstack([cyclone_marginals_train, normal_marginals_train])
++        test = np.vstack([cyclone_marginals_test, normal_marginals_test])
++    elif conditions == "normal":
++        train = normal_marginals_train
++        test = normal_marginals_test
++    elif conditions == "cyclone":
++        train = cyclone_marginals_train
++        test = cyclone_marginals_test
++
++    train_size = len(train)
++    train = tf.convert_to_tensor(train, dtype='float32')
++    train = tf.reshape(train, (train_size, 61, 61, 1))
++    train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+     train = tf.pad(train, paddings)
+ 
+-    test = tf.convert_to_tensor(test_set, dtype='float32')
+-    test = tf.reshape(test, (n - n_train, 61, 61, 1))
+-    if output_size is not None:
+-        test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
++    test_size = len(test)
++    test = tf.convert_to_tensor(test, dtype='float32')
++    test = tf.reshape(test, (test_size, 61, 61, 1))
++    test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+     test = tf.pad(test, paddings)
+ 
+-    if viz:
+-        fig, axs = plt.subplots(1, 5, figsize=(15, 3))
+-        for i, ax in enumerate(axs):
+-            im = ax.imshow(train[i, :, :, 0].numpy())
+-        plt.suptitle('Training data (original scale)')
+-        divider = make_axes_locatable(ax)
+-        cax = divider.append_axes('right', size='5%', pad=0.05)
+-        fig.colorbar(im, cax=cax, orientation='vertical')
+-
+     return train, test
+ 
+ 
+-def load_era5_datasets(roots, n_train, batch_size, im_size, paddings=tf.constant([[0,0],[1,1],[1,1], [0,0]]), conditions="normal", scale=True, viz=False):
++def load_datasets(indir, train_size, batch_size, conditions="all", dims=["u10", "v10"], output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
+     """Wrapper function to load ERA5 with certain conditions (for hyperparameter tuning)."""
++
++    indir = os.path.join(indir, f"train_{train_size}")
+     train_sets = []
+     test_sets = []
+-
+-    for root in roots:
+-        if scale:
+-            train_images, test_images = load_and_scale_era5_for_tf(root, paddings, n_train, im_size, conditions=conditions, viz=viz)
+-        else:
+-            train_images, test_images = load_era5_for_tf(root, n_train, im_size, conditions=conditions, viz=viz)
+-        train_sets.append(train_images[..., 0])
+-        test_sets.append(test_images[..., 0])
++    for dim in dims:
++        train, test = load_marginals(indir, dim=dim, conditions=conditions, output_size=output_size, paddings=paddings)
++        train_sets.append(train[..., 0])
++        test_sets.append(test[..., 0])
+ 
+     # stack them together in multichannel images
+-    train_images = tf.stack(train_sets, axis=-1)
+-    test_images = tf.stack(test_sets, axis=-1)
++    train_ims = tf.stack(train_sets, axis=-1)
++    test_ims = tf.stack(test_sets, axis=-1)
+ 
+     # create datasets
+-    train = tf.data.Dataset.from_tensor_slices(train_images).shuffle(len(train_images)).batch(batch_size)
+-    test = tf.data.Dataset.from_tensor_slices(test_images).shuffle(len(test_images)).batch(batch_size)
++    train = tf.data.Dataset.from_tensor_slices(train_ims).shuffle(len(train_ims)).batch(batch_size)
++    test = tf.data.Dataset.from_tensor_slices(test_ims).shuffle(len(test_ims)).batch(batch_size)
+ 
+-    return train, test, train_images, test_images
++    return train, test, train_ims, test_ims
+diff --git a/evtGAN/viz_utils.py b/evtGAN/viz_utils.py
+index 09e9567..0e789b5 100644
+--- a/evtGAN/viz_utils.py
++++ b/evtGAN/viz_utils.py
+@@ -33,6 +33,51 @@ def plot_generated_marginals(fake_data, start=0, channel=0):
+     return fig
+ 
+ 
++def plot_sample_density(data, reference_data, ax, celcius=True, sample_pixels=None):
++    """For generated quantiles."""
++    h, w = data.shape[1:3]
++    n = h * w
++
++    if sample_pixels is None:
++        sample_pixels_x = random.sample(range(n), 1)
++        sample_pixels_y = random.sample(range(n), 1)
++    else:
++        assert sample_pixels[0] != sample_pixels[1]
++        sample_pixels_x = [sample_pixels[0]]
++        sample_pixels_y = [sample_pixels[1]]
++
++    data_ravel = tf.reshape(data, [len(data), n])
++
++    sample_x = tf.gather(data_ravel, sample_pixels_x, axis=1)
++    sample_y = tf.gather(data_ravel, sample_pixels_y, axis=1)
++
++    frechet_x = -tf.math.log(1 - sample_x)
++    frechet_y = -tf.math.log(1 - sample_y)
++
++    ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
++
++    # transform to original data and Celcius and plot
++    sample_x = np.quantile(reference_data, sample_x)
++    sample_y = np.quantile(reference_data, sample_y)
++
++    if celcius:
++        sample_x = kelvinToCelsius(sample_x)
++        sample_y = kelvinToCelsius(sample_y)
++
++    scatter_density(sample_x, sample_y, ax, title=f'$\chi$: {ec_xy:4f}')
++
++
++def scatter_density(x, y, ax, title=''):
++    xy = np.hstack([x, y]).transpose()
++    z = gaussian_kde(xy)(xy)
++    idx = z.argsort()
++    x, y, z = x[idx], y[idx], z[idx]
++    ax.scatter(x, y, c=z, s=10)
++    ax.set_title(title)
++    return ax
++
++
++
+ def compare_ecs_plot(train_images, test_images, fake_data, train_orig_images, channel=0):
+     fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
+ 
+diff --git a/figures/.DS_Store b/figures/.DS_Store
+deleted file mode 100644
+index 85ab04b..0000000
+Binary files a/figures/.DS_Store and /dev/null differ
+diff --git a/saved-models/.DS_Store b/saved-models/.DS_Store
+index 2c47198..cf26dc8 100644
+Binary files a/saved-models/.DS_Store and b/saved-models/.DS_Store differ
+diff --git a/scripts/.DS_Store b/scripts/.DS_Store
+index c3bd8e8..b3df197 100644
+Binary files a/scripts/.DS_Store and b/scripts/.DS_Store differ
+diff --git a/scripts/train_dcgan.py b/scripts/train_dcgan.py
+index 53460b7..9163890 100644
+--- a/scripts/train_dcgan.py
++++ b/scripts/train_dcgan.py
+@@ -6,6 +6,7 @@ Note, requires config to create new model too.
+ """
+ 
+ import os
++import numpy as np
+ from datetime import datetime
+ import tensorflow as tf
+ tf.config.set_visible_devices([], 'GPU')
+@@ -15,21 +16,21 @@ from wandb.keras import WandbCallback
+ import matplotlib.pyplot as plt
+ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+ 
+-from evtGAN import DCGAN, tf_utils, viz_utils
++from evtGAN import ChiScore, CrossEntropy, DCGAN, tf_utils, viz_utils, compile_dcgan
+ 
+ global rundir
+ 
+ plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
+ 
+ # some static variables
+-paddings = tf.constant([[0,0],[1,1],[1,1], [0,0]])
++paddings = tf.constant([[0,0], [1,1], [1,1], [0,0]])
+ var = 'wind'
+ conditions = "all"
+ im_size = (19, 23)
+ cwd = os.getcwd()
+ wd = os.path.join(cwd, "..")
+-roots = [os.path.join(wd, "..", "wind_data", "u10_dailymax.csv"), os.path.join(wd, "..", "wind_data", "v10_dailymax.csv")]
+-imdir = os.path.join(cwd, 'figures', 'temp')
++indir = "/Users/alison/Documents/DPhil/multivariate/processed_wind_data"
++imdir = os.path.join(wd, 'figures', 'temp')
+ 
+ 
+ def log_image_to_wandb(fig, name:str, dir:str):
+@@ -39,30 +40,32 @@ def log_image_to_wandb(fig, name:str, dir:str):
+ 
+ 
+ def main(config):
+-    train, test, train_images, test_images = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, viz=False)
+-    _, _, orig_images, _ = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, scale=True, viz=False)
++    # load data
++    train, test, train_ims, test_ims = tf_utils.load_datasets(indir, config.train_size, config.batch_size, conditions="all")
++    params_u10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_u10_train.npy"))
++    params_v10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_v10_train.npy"))
+ 
+     # train test callbacks
+-    chi_score = DCGAN.ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
+-    cross_entropy = DCGAN.CrossEntropy(next(iter(test)))
++    chi_score = ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
++    cross_entropy = CrossEntropy(next(iter(test)))
+ 
+-    import pdb; pdb.set_trace()
+     # compile
+     with tf.device('/gpu:0'):
+-        gan = DCGAN.compile_dcgan(config)
++        gan = compile_dcgan(config)
+         gan.fit(train, epochs=config.nepochs, callbacks=[WandbCallback(), chi_score, cross_entropy])
+ 
+-    finish_time = datetime.now().strftime("%Y%m%d")
+-    gan.generator.save_weights(os.path.join(wd, 'saved_models', f'{finish_time}_generator_weights'))
+-    gan.discriminator.save_weights(os.path.join(wd, 'saved_models', f'{finish_time}_discriminator_weights'))
++    gan.generator.save_weights(os.path.join(rundir, f'generator_weights'))
++    gan.discriminator.save_weights(os.path.join(rundir, f'discriminator_weights'))
+ 
+     # generate 1000 images to visualise some results
+     synthetic_data = gan(1000)
+     synthetic_data = tf_utils.tf_unpad(synthetic_data, paddings).numpy()
+ 
+     fig = viz_utils.plot_generated_marginals(synthetic_data)
+-    log_image_to_wandb(fig, 'generated_marginals', imdir)
++    import pdb;pdb.set_trace()
++    log_image_to_wandb(fig, f'generated_marginals_{runname}', imdir)
+ 
++    # TODO: modify to use params
+     fig = viz_utils.compare_ecs_plot(train_images, test_images, synthetic_data, orig_images, channel=0)
+     log_image_to_wandb(fig, 'correlations_u10', imdir)
+ 
+@@ -76,7 +79,7 @@ def main(config):
+ if __name__ == "__main__":
+     wandb.init(settings=wandb.Settings(code_dir="."))
+ 
+-    rundir = os.path.join(wd, "saved-models", wandb.run.name)
++    rundir = os.path.join(cwd, "saved-models", wandb.run.name)
+     os.makedirs(rundir)
+ 
+     tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf
+diff --git a/scripts/wandb/.DS_Store b/scripts/wandb/.DS_Store
+index e8e21c1..7d42a44 100644
+Binary files a/scripts/wandb/.DS_Store and b/scripts/wandb/.DS_Store differ
+diff --git a/scripts/wandb/latest-run b/scripts/wandb/latest-run
+index 3ddd0f9..81b9b13 120000
+--- a/scripts/wandb/latest-run
++++ b/scripts/wandb/latest-run
+@@ -1 +1 @@
+-run-20230727_113208-ggaugfqf
+\ No newline at end of file
++run-20230727_172029-4tqtfmch
+\ No newline at end of file
+diff --git a/scripts/wandb/run-20230727_113111-ljnpv0oh/.DS_Store b/scripts/wandb/run-20230727_113111-ljnpv0oh/.DS_Store
+deleted file mode 100644
+index 98c5a2f..0000000
+Binary files a/scripts/wandb/run-20230727_113111-ljnpv0oh/.DS_Store and /dev/null differ
+diff --git a/scripts/wandb/run-20230727_113208-ggaugfqf/.DS_Store b/scripts/wandb/run-20230727_113208-ggaugfqf/.DS_Store
+deleted file mode 100644
+index e9c3915..0000000
+Binary files a/scripts/wandb/run-20230727_113208-ggaugfqf/.DS_Store and /dev/null differ
+diff --git a/wandb/.DS_Store b/wandb/.DS_Store
+index 636abc4..ba16e49 100644
+Binary files a/wandb/.DS_Store and b/wandb/.DS_Store differ

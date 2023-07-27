@@ -1,0 +1,101 @@
+wandb_version: 1
+
+nepochs:
+  desc: null
+  value: 2
+train_size:
+  desc: null
+  value: 200
+batch_size:
+  desc: null
+  value: 50
+chi_frequency:
+  desc: null
+  value: 5
+seed:
+  desc: null
+  value: 2
+lambda_:
+  desc: null
+  value: 0.1
+training_balance:
+  desc: null
+  value: 2
+true_label_smooth:
+  desc: null
+  value: 0.9
+lrelu:
+  desc: null
+  value: 0.308623096408301
+dropout:
+  desc: null
+  value: 0.17212992990721143
+latent_dims:
+  desc: null
+  value: 100
+g_layers:
+  desc: null
+  value:
+  - 25600
+  - 512
+  - 256
+d_layers:
+  desc: null
+  value:
+  - 64
+  - 128
+  - 256
+learning_rate:
+  desc: null
+  value: 0.00033311627536622494
+beta_1:
+  desc: null
+  value: 0.5968270381256018
+beta_2:
+  desc: null
+  value: 0.999
+clipnorm:
+  desc: null
+  value: null
+global_clipnorm:
+  desc: null
+  value: null
+use_ema:
+  desc: null
+  value: true
+ema_momentum:
+  desc: null
+  value: 0.9
+ema_overwrite_frequency:
+  desc: null
+  value: 1
+_wandb:
+  desc: null
+  value:
+    code_path: code/scripts/train_dcgan.py
+    python_version: 3.10.12
+    cli_version: 0.15.5
+    framework: keras
+    is_jupyter_run: false
+    is_kaggle_kernel: false
+    start_time: 1690474560.024613
+    t:
+      1:
+      - 2
+      - 3
+      - 55
+      2:
+      - 2
+      - 3
+      - 55
+      3:
+      - 3
+      - 8
+      - 23
+      4: 3.10.12
+      5: 0.15.5
+      8:
+      - 4
+      - 5
+      10:
+      - 9

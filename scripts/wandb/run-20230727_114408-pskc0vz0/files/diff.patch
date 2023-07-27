@@ -1,0 +1,333 @@
+diff --git a/.DS_Store b/.DS_Store
+index 400b762..52b3b89 100644
+Binary files a/.DS_Store and b/.DS_Store differ
+diff --git a/evtGAN/.DS_Store b/evtGAN/.DS_Store
+index 2bb524c..62e0c85 100644
+Binary files a/evtGAN/.DS_Store and b/evtGAN/.DS_Store differ
+diff --git a/evtGAN/tf_utils.py b/evtGAN/tf_utils.py
+index b90a5a9..8353c25 100644
+--- a/evtGAN/tf_utils.py
++++ b/evtGAN/tf_utils.py
+@@ -4,6 +4,7 @@ import random
+ import numpy as np
+ import pandas as pd
+ import tensorflow as tf
++from scipy.stats import genextreme
+ import matplotlib.pyplot as plt
+ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+ from scipy.stats import gaussian_kde
+@@ -21,35 +22,18 @@ def tf_unpad(tensor, paddings):
+     return tensor[unpaddings]
+ 
+ 
+-def marginal(dataset):
+-    a = ecdf(dataset)
+-    J = np.shape(a)[1]
+-    n = np.shape(a)[0]
+-    z = n * (-1)
+-    for j in range(J):
+-        if np.sum(a[:, j]) == z:
+-            a[:, j] = np.zeros(np.shape(a[:, j])[0])
+-    return a
+-
+-
+-def ecdf(dataset):
+-    return rank(dataset) / (len(dataset) + 1)
+-# NOTE: (tf_utils.ecdf(train_set) == tf_utils.marginal(train_set)).all() is true usually
+-
+-
+-def rank(dataset):
+-    ranked = np.empty(np.shape(dataset))
+-    for j in range(np.shape(ranked)[1]):
+-        if all(i == dataset[0,j] for i in dataset[:,j]):
+-            ranked[:,j] = len(ranked[:,j]) / 2 + 0.5
+-        else:
+-            array = dataset[:,j]
+-            temp = array.argsort()
+-            ranks = np.empty_like(temp)
+-            ranks[temp] = np.arange(len(array))
+-            ranked[:,j] = ranks + 1
+-    return ranked
++def gev_marginals(dataset):
++    """Transform dataset to marginals of generalised extreme value distribution."""
++    n, m = dataset.shape
++    params = [genextreme.fit(dataset[i, ...]) for i in range(n)]
++    marginals = np.array([genextreme.cdf(dataset[i, ...], *params[i]) for i in range(n)])
++    return marginals, params
+ 
++def gev_quantiles(marginals, params):
++    """Transform marginals of generalised extreme value distribution to original scale."""
++    n, m = marginals.shape
++    quantiles = np.array([genextreme.ppf(marginals[i, ...], *params[i]) for i in range(n)])
++    return quantiles
+ 
+ def get_ec_variogram(x, y):
+     """Extremal correlation by variogram as in §2.1."""
+@@ -121,134 +105,6 @@ def raw_extremal_correlation(frechet_x, frechet_y):
+ ########################################################################################################
+ 
+ 
+-def plot_sample_density(data, reference_data, ax, celcius=True, sample_pixels=None):
+-    """For generated quantiles."""
+-    h, w = data.shape[1:3]
+-    n = h * w
+-
+-    if sample_pixels is None:
+-        sample_pixels_x = random.sample(range(n), 1)
+-        sample_pixels_y = random.sample(range(n), 1)
+-    else:
+-        assert sample_pixels[0] != sample_pixels[1]
+-        sample_pixels_x = [sample_pixels[0]]
+-        sample_pixels_y = [sample_pixels[1]]
+-
+-    data_ravel = tf.reshape(data, [len(data), n])
+-
+-    sample_x = tf.gather(data_ravel, sample_pixels_x, axis=1)
+-    sample_y = tf.gather(data_ravel, sample_pixels_y, axis=1)
+-
+-    frechet_x = -tf.math.log(1 - sample_x)
+-    frechet_y = -tf.math.log(1 - sample_y)
+-
+-    ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
+-
+-    # transform to original data and Celcius and plot
+-    sample_x = np.quantile(reference_data, sample_x)
+-    sample_y = np.quantile(reference_data, sample_y)
+-
+-    if celcius:
+-        sample_x = kelvinToCelsius(sample_x)
+-        sample_y = kelvinToCelsius(sample_y)
+-
+-    scatter_density(sample_x, sample_y, ax, title=f'$\chi$: {ec_xy:4f}')
+-
+-
+-def scatter_density(x, y, ax, title=''):
+-    xy = np.hstack([x, y]).transpose()
+-    z = gaussian_kde(xy)(xy)
+-    idx = z.argsort()
+-    x, y, z = x[idx], y[idx], z[idx]
+-    ax.scatter(x, y, c=z, s=10)
+-    ax.set_title(title)
+-    return ax
+-
+-
+-def load_for_tf(root, paddings, n_train, output_size=None):
+-    df_train_test = pd.read_csv(root, sep=',',header=None).iloc[1:]
+-
+-    #Load data and view
+-    plt.figure(figsize=(15, 3))
+-    plt.plot(range(2000), df_train_test.iloc[0,:].values.astype(float), linewidth=.5, color='k')
+-    plt.ylabel('Temperature (K)')
+-    plt.title('Time series for single pixel')
+-    plt.show()
+-
+-    df_train_test = df_train_test.values.astype(float).transpose()
+-    n = df_train_test.shape[0]
+-
+-    #train set: need to standardise it separately (as df is ... but then split)
+-    train_set = df_train_test[:n_train,:]
+-
+-    #valid set: need to standardise it separately (as df is ... but then split)
+-    test_set = df_train_test[n_train:,:]
+-
+-    train = tf.convert_to_tensor(train_set, dtype='float32')
+-    train = tf.reshape(train, (n_train, 18, 22, 1))
+-    if output_size is not None:
+-        train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+-#     train = tf.pad(train, paddings)
+-
+-    test = tf.convert_to_tensor(test_set, dtype='float32')
+-    test = tf.reshape(test, (n - n_train, 18, 22, 1))
+-    if output_size is not None:
+-        test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+-
+-    fig, axs = plt.subplots(1, 5, figsize=(15, 3))
+-    for i, ax in enumerate(axs):
+-        im = ax.imshow(train[i, :, :, 0].numpy())
+-    plt.suptitle('Training data (original scale)')
+-    divider = make_axes_locatable(ax)
+-    cax = divider.append_axes('right', size='5%', pad=0.05)
+-    fig.colorbar(im, cax=cax, orientation='vertical')
+-
+-    return train, test
+-
+-
+-def load_and_scale_for_tf(root, paddings, n_train, output_size=None):
+-    df_train_test = pd.read_csv(root, sep=',',header=None).iloc[1:]
+-
+-    #Load data and view
+-    plt.figure(figsize=(15, 3))
+-    plt.plot(range(2000), df_train_test.iloc[0, :].values.astype(float), linewidth=.5, color='k')
+-    plt.ylabel('Temperature (K)')
+-    plt.title('Time series for single pixel')
+-    plt.show()
+-
+-    df_train_test = df_train_test.values.astype(float).transpose()
+-    n = df_train_test.shape[0]
+-
+-    #train set: need to standardise it separately (as df is ... but then split)
+-    train_set = df_train_test[:n_train,:]
+-    train_set = marginal(train_set)
+-
+-    #valid set: need to standardise it separately (as df is ... but then split)
+-    test_set = df_train_test[n_train:,:]
+-    test_set = marginal(test_set)
+-
+-    train = tf.convert_to_tensor(train_set, dtype='float32')
+-    train = tf.reshape(train, (n_train, 18, 22, 1))
+-    if output_size is not None:
+-        train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+-    train = tf.pad(train, paddings)
+-
+-    test = tf.convert_to_tensor(test_set, dtype='float32')
+-    test = tf.reshape(test, (n - n_train, 18, 22, 1))
+-    if output_size is not None:
+-        test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+-    test = tf.pad(test, paddings)
+-
+-    fig, axs = plt.subplots(1, 5, figsize=(15, 3))
+-    for i, ax in enumerate(axs):
+-        im = ax.imshow(train[i, :, :, 0].numpy())
+-    plt.suptitle('Training data (scaled)')
+-    divider = make_axes_locatable(ax)
+-    cax = divider.append_axes('right', size='5%', pad=0.05)
+-    fig.colorbar(im, cax=cax, orientation='vertical')
+-
+-    return train, test
+-
+ 
+ def load_era5_for_tf(indir, n_train, output_size=(17, 21), conditions='normal', viz=True):
+     """Load ERA5 data from supplied directories.
+@@ -345,9 +201,9 @@ def load_and_scale_era5_for_tf(indir, paddings, n_train, output_size = (17, 21),
+     assert n_train < n, f"Requested train size ({n_train}) exceeds size of dataset ({n})."
+ 
+     train_set = df[:n_train,:]
+-    train_set = marginal(train_set)
+     test_set = df[n_train:,:]
+-    test_set = marginal(test_set)
++    train_set, gev_params = gev_marginals(train_set)
++    test_set, *_ = gev_marginals(test_set)
+ 
+     train = tf.convert_to_tensor(train_set, dtype='float32')
+     train = tf.reshape(train, (n_train, 61, 61, 1))
+@@ -371,7 +227,7 @@ def load_and_scale_era5_for_tf(indir, paddings, n_train, output_size = (17, 21),
+         cax = divider.append_axes('right', size='5%', pad=0.05)
+         fig.colorbar(im, cax=cax, orientation='vertical')
+ 
+-    return train, test
++    return train, test, gev_params
+ 
+ 
+ def load_era5_datasets(roots, n_train, batch_size, im_size, paddings=tf.constant([[0,0],[1,1],[1,1], [0,0]]), conditions="normal", scale=True, viz=False):
+@@ -381,7 +237,7 @@ def load_era5_datasets(roots, n_train, batch_size, im_size, paddings=tf.constant
+ 
+     for root in roots:
+         if scale:
+-            train_images, test_images = load_and_scale_era5_for_tf(root, paddings, n_train, im_size, conditions=conditions, viz=viz)
++            train_images, test_images, gev_params = load_and_scale_era5_for_tf(root, paddings, n_train, im_size, conditions=conditions, viz=viz)
+         else:
+             train_images, test_images = load_era5_for_tf(root, n_train, im_size, conditions=conditions, viz=viz)
+         train_sets.append(train_images[..., 0])
+@@ -395,4 +251,4 @@ def load_era5_datasets(roots, n_train, batch_size, im_size, paddings=tf.constant
+     train = tf.data.Dataset.from_tensor_slices(train_images).shuffle(len(train_images)).batch(batch_size)
+     test = tf.data.Dataset.from_tensor_slices(test_images).shuffle(len(test_images)).batch(batch_size)
+ 
+-    return train, test, train_images, test_images
++    return train, test, train_images, test_images, gev_params
+diff --git a/evtGAN/viz_utils.py b/evtGAN/viz_utils.py
+index 09e9567..0e789b5 100644
+--- a/evtGAN/viz_utils.py
++++ b/evtGAN/viz_utils.py
+@@ -33,6 +33,51 @@ def plot_generated_marginals(fake_data, start=0, channel=0):
+     return fig
+ 
+ 
++def plot_sample_density(data, reference_data, ax, celcius=True, sample_pixels=None):
++    """For generated quantiles."""
++    h, w = data.shape[1:3]
++    n = h * w
++
++    if sample_pixels is None:
++        sample_pixels_x = random.sample(range(n), 1)
++        sample_pixels_y = random.sample(range(n), 1)
++    else:
++        assert sample_pixels[0] != sample_pixels[1]
++        sample_pixels_x = [sample_pixels[0]]
++        sample_pixels_y = [sample_pixels[1]]
++
++    data_ravel = tf.reshape(data, [len(data), n])
++
++    sample_x = tf.gather(data_ravel, sample_pixels_x, axis=1)
++    sample_y = tf.gather(data_ravel, sample_pixels_y, axis=1)
++
++    frechet_x = -tf.math.log(1 - sample_x)
++    frechet_y = -tf.math.log(1 - sample_y)
++
++    ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
++
++    # transform to original data and Celcius and plot
++    sample_x = np.quantile(reference_data, sample_x)
++    sample_y = np.quantile(reference_data, sample_y)
++
++    if celcius:
++        sample_x = kelvinToCelsius(sample_x)
++        sample_y = kelvinToCelsius(sample_y)
++
++    scatter_density(sample_x, sample_y, ax, title=f'$\chi$: {ec_xy:4f}')
++
++
++def scatter_density(x, y, ax, title=''):
++    xy = np.hstack([x, y]).transpose()
++    z = gaussian_kde(xy)(xy)
++    idx = z.argsort()
++    x, y, z = x[idx], y[idx], z[idx]
++    ax.scatter(x, y, c=z, s=10)
++    ax.set_title(title)
++    return ax
++
++
++
+ def compare_ecs_plot(train_images, test_images, fake_data, train_orig_images, channel=0):
+     fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
+ 
+diff --git a/saved-models/.DS_Store b/saved-models/.DS_Store
+index 2c47198..58c2699 100644
+Binary files a/saved-models/.DS_Store and b/saved-models/.DS_Store differ
+diff --git a/scripts/.DS_Store b/scripts/.DS_Store
+index c3bd8e8..6c8767d 100644
+Binary files a/scripts/.DS_Store and b/scripts/.DS_Store differ
+diff --git a/scripts/train_dcgan.py b/scripts/train_dcgan.py
+index 53460b7..4fb1dff 100644
+--- a/scripts/train_dcgan.py
++++ b/scripts/train_dcgan.py
+@@ -39,8 +39,8 @@ def log_image_to_wandb(fig, name:str, dir:str):
+ 
+ 
+ def main(config):
+-    train, test, train_images, test_images = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, viz=False)
+-    _, _, orig_images, _ = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, scale=True, viz=False)
++    train, test, train_images, test_images, gev_params = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, viz=False)
++    # _, _, orig_images, _ = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, scale=True, viz=False)
+ 
+     # train test callbacks
+     chi_score = DCGAN.ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
+@@ -79,6 +79,6 @@ if __name__ == "__main__":
+     rundir = os.path.join(wd, "saved-models", wandb.run.name)
+     os.makedirs(rundir)
+ 
+-    tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf
++    # tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf
+     tf.config.experimental.enable_op_determinism()  # removes stochasticity from individual operations
+     main(wandb.config)
+diff --git a/scripts/wandb/.DS_Store b/scripts/wandb/.DS_Store
+index e8e21c1..3971000 100644
+Binary files a/scripts/wandb/.DS_Store and b/scripts/wandb/.DS_Store differ
+diff --git a/scripts/wandb/latest-run b/scripts/wandb/latest-run
+index 3ddd0f9..9b1fbb2 120000
+--- a/scripts/wandb/latest-run
++++ b/scripts/wandb/latest-run
+@@ -1 +1 @@
+-run-20230727_113208-ggaugfqf
+\ No newline at end of file
++run-20230727_114408-pskc0vz0
+\ No newline at end of file

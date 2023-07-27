@@ -31,7 +31,7 @@ def process_adam_from_config(config):
 
 def compile_dcgan(config, loss_fn=cross_entropy, nchannels=2):
     adam_kwargs = process_adam_from_config(config)
-    d_optimizer = Adam(**adam_kwargs) # RMSprop(learning_rate=0) # 
+    d_optimizer = Adam(**adam_kwargs) # RMSprop(learning_rate=0) #
     g_optimizer = Adam(**adam_kwargs) # RMSprop(learning_rate=0)
     dcgan = DCGAN(config, nchannels=nchannels)
     dcgan.compile(d_optimizer=d_optimizer, g_optimizer=g_optimizer, loss_fn=loss_fn)
@@ -133,7 +133,6 @@ class DCGAN(keras.Model):
         return self.generator(random_latent_vectors, training=False)
 
     def train_step(self, data):
-        tf.print(f"\n\nStart of train step:", self.generator.trainable_variables[0][0], "\n\n")
         batch_size = tf.shape(data)[0]
         random_latent_vectors = tf.random.normal((batch_size, self.latent_dim))
         fake_data = self.generator(random_latent_vectors, training=False)
@@ -150,8 +149,7 @@ class DCGAN(keras.Model):
                 d_loss = d_loss_real + d_loss_fake
             grads = tape.gradient(d_loss, self.discriminator.trainable_weights)
             self.d_optimizer.apply_gradients(zip(grads, self.discriminator.trainable_weights))
-        
-        tf.print(f"\n\nAfter discriminator training:", self.generator.trainable_variables[0][0])
+
         # sample random points in the latent space (again)
         random_latent_vectors = tf.random.normal((batch_size, self.latent_dim))
         misleading_labels = tf.ones((batch_size, 1))  # i.e., want to trick discriminator
@@ -164,9 +162,7 @@ class DCGAN(keras.Model):
             g_penalty = self.lambda_ * get_chi_score(data, generated_data, sample_size=tf.constant(25))
             g_loss = g_loss_raw #+ g_penalty
         grads = tape.gradient(g_loss, self.generator.trainable_weights)
-        tf.print(f"Before updating generator weights:", self.generator.trainable_variables[0][0])
         self.g_optimizer.apply_gradients(zip(grads, self.generator.trainable_weights))
-        tf.print(f"After updating generator weights:", self.generator.trainable_variables[0][0], "\n\n")
 
         # update metrics and return their values
         self.d_loss_real_tracker.update_state(d_loss_real)

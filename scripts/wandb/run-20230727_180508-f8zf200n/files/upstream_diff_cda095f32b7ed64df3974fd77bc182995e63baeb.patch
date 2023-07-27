@@ -1,0 +1,2816 @@
+diff --git a/.DS_Store b/.DS_Store
+index 53558da..8fab133 100644
+Binary files a/.DS_Store and b/.DS_Store differ
+diff --git a/evtGAN/.DS_Store b/evtGAN/.DS_Store
+index 2bb524c..c7dc632 100644
+Binary files a/evtGAN/.DS_Store and b/evtGAN/.DS_Store differ
+diff --git a/evtGAN/DCGAN.py b/evtGAN/DCGAN.py
+index b2e0bb5..0a19398 100644
+--- a/evtGAN/DCGAN.py
++++ b/evtGAN/DCGAN.py
+@@ -31,7 +31,7 @@ def process_adam_from_config(config):
+ 
+ def compile_dcgan(config, loss_fn=cross_entropy, nchannels=2):
+     adam_kwargs = process_adam_from_config(config)
+-    d_optimizer = Adam(**adam_kwargs) # RMSprop(learning_rate=0) # 
++    d_optimizer = Adam(**adam_kwargs) # RMSprop(learning_rate=0) #
+     g_optimizer = Adam(**adam_kwargs) # RMSprop(learning_rate=0)
+     dcgan = DCGAN(config, nchannels=nchannels)
+     dcgan.compile(d_optimizer=d_optimizer, g_optimizer=g_optimizer, loss_fn=loss_fn)
+@@ -133,7 +133,6 @@ class DCGAN(keras.Model):
+         return self.generator(random_latent_vectors, training=False)
+ 
+     def train_step(self, data):
+-        tf.print(f"\n\nStart of train step:", self.generator.trainable_variables[0][0], "\n\n")
+         batch_size = tf.shape(data)[0]
+         random_latent_vectors = tf.random.normal((batch_size, self.latent_dim))
+         fake_data = self.generator(random_latent_vectors, training=False)
+@@ -150,8 +149,7 @@ class DCGAN(keras.Model):
+                 d_loss = d_loss_real + d_loss_fake
+             grads = tape.gradient(d_loss, self.discriminator.trainable_weights)
+             self.d_optimizer.apply_gradients(zip(grads, self.discriminator.trainable_weights))
+-        
+-        tf.print(f"\n\nAfter discriminator training:", self.generator.trainable_variables[0][0])
++
+         # sample random points in the latent space (again)
+         random_latent_vectors = tf.random.normal((batch_size, self.latent_dim))
+         misleading_labels = tf.ones((batch_size, 1))  # i.e., want to trick discriminator
+@@ -164,9 +162,7 @@ class DCGAN(keras.Model):
+             g_penalty = self.lambda_ * get_chi_score(data, generated_data, sample_size=tf.constant(25))
+             g_loss = g_loss_raw #+ g_penalty
+         grads = tape.gradient(g_loss, self.generator.trainable_weights)
+-        tf.print(f"Before updating generator weights:", self.generator.trainable_variables[0][0])
+         self.g_optimizer.apply_gradients(zip(grads, self.generator.trainable_weights))
+-        tf.print(f"After updating generator weights:", self.generator.trainable_variables[0][0], "\n\n")
+ 
+         # update metrics and return their values
+         self.d_loss_real_tracker.update_state(d_loss_real)
+diff --git a/evtGAN/config-defaults.yaml b/evtGAN/config-defaults.yaml
+deleted file mode 100644
+index 2ef0722..0000000
+--- a/evtGAN/config-defaults.yaml
++++ /dev/null
+@@ -1,56 +0,0 @@
+-# training settings
+-nepochs:
+-  value: 7500
+-train_size:
+-  value: 200
+-batch_size:
+-  value: 50
+-chi_frequency:
+-  desc: How often to calculate chi-score for train and test.
+-  value: 5
+-seed:
+-  value: 2
+-
+-# training features
+-lambda_:
+-  value: 0.1
+-training_balance:
+-  desc: How many more times to train discriminator than generator.
+-  value: 2
+-true_label_smooth:
+-  desc: Multiply true labels by this to smooth discriminator's labels.
+-  value: 0.9
+-
+-# architecture
+-lrelu:
+-  value: 0.308623096408301
+-dropout:
+-  value: 0.17212992990721143
+-latent_dims:
+-  value: 100
+-g_layers:
+-  desc: Number of channels in the hidden layers for the generator.
+-  value: [25600, 512, 256]
+-d_layers:
+-  desc: Number of channels in the hidden layers for the discriminator.
+-  value: [64, 128, 256]
+-
+-
+-# Adam parameters
+-learning_rate:
+-  value: 0.00033311627536622494
+-beta_1:
+-  value: 0.5968270381256018
+-beta_2:
+-  value: 0.999
+-clipnorm:
+-  value:
+-global_clipnorm:
+-  value:
+-use_ema:
+-  value: True
+-ema_momentum:
+-  value: 0.9
+-ema_overwrite_frequency:
+-  desc: How often to overwrite weights with ema.
+-  value: 1
+diff --git a/evtGAN/tf_utils.py b/evtGAN/tf_utils.py
+index b90a5a9..fc8ac9d 100644
+--- a/evtGAN/tf_utils.py
++++ b/evtGAN/tf_utils.py
+@@ -1,9 +1,10 @@
+ """Helper functions for running evtGAN in TensorFlow."""
+-
++import os
+ import random
+ import numpy as np
+ import pandas as pd
+ import tensorflow as tf
++from scipy.stats import genextreme
+ import matplotlib.pyplot as plt
+ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+ from scipy.stats import gaussian_kde
+@@ -20,36 +21,34 @@ def tf_unpad(tensor, paddings):
+     unpaddings = [slice(pad.numpy()[0], -pad.numpy()[1]) if sum(pad.numpy()>0)  else slice(None, None) for pad in paddings]
+     return tensor[unpaddings]
+ 
+-
+-def marginal(dataset):
+-    a = ecdf(dataset)
+-    J = np.shape(a)[1]
+-    n = np.shape(a)[0]
+-    z = n * (-1)
+-    for j in range(J):
+-        if np.sum(a[:, j]) == z:
+-            a[:, j] = np.zeros(np.shape(a[:, j])[0])
+-    return a
+-
+-
+-def ecdf(dataset):
+-    return rank(dataset) / (len(dataset) + 1)
+-# NOTE: (tf_utils.ecdf(train_set) == tf_utils.marginal(train_set)).all() is true usually
+-
+-
+-def rank(dataset):
+-    ranked = np.empty(np.shape(dataset))
+-    for j in range(np.shape(ranked)[1]):
+-        if all(i == dataset[0,j] for i in dataset[:,j]):
+-            ranked[:,j] = len(ranked[:,j]) / 2 + 0.5
+-        else:
+-            array = dataset[:,j]
+-            temp = array.argsort()
+-            ranks = np.empty_like(temp)
+-            ranks[temp] = np.arange(len(array))
+-            ranked[:,j] = ranks + 1
+-    return ranked
+-
++def fit_gev(dataset):
++    """Fit GEV to dataset. Takes a while for large datasets."""
++    m = dataset.shape[1]
++    params = [genextreme.fit(dataset[..., j]) for j in range(m)]
++    return params
++
++def gev_marginals(dataset, params):
++    """Transform dataset to marginals of generalised extreme value distribution."""
++    m = dataset.shape[1]
++    marginals = np.array([genextreme.cdf(dataset[..., j], *params[j]) for j in range(m)]).T
++    return marginals
++
++def gev_quantiles(marginals, params):
++    """Transform marginals of generalised extreme value distribution to original scale."""
++    m = marginals.shape[1]
++    quantiles = np.array([genextreme.ppf(marginals[..., j], *params[j]) for j in range(m)]).T
++    return quantiles
++
++# marginals_to_winds
++def marginals_to_winds(marginals, params:tuple):
++    winds = tf.image.resize(marginals, [61, 61])
++    winds = tf.reshape(winds, [1000, 61 * 61, 2]).numpy()
++    winds_u10 = gev_quantiles(winds[..., 0], params[0])
++    winds_u10 = np.reshape(winds_u10, [1000, 61, 61])
++    winds_v10 = gev_quantiles(winds[..., 0], params[1])
++    winds_v10 = np.reshape(winds_v10, [1000, 61, 61])
++    winds = np.stack([winds_u10, winds_v10], axis=-1)
++    return winds
+ 
+ def get_ec_variogram(x, y):
+     """Extremal correlation by variogram as in §2.1."""
+@@ -120,279 +119,93 @@ def raw_extremal_correlation(frechet_x, frechet_y):
+ 
+ ########################################################################################################
+ 
+-
+-def plot_sample_density(data, reference_data, ax, celcius=True, sample_pixels=None):
+-    """For generated quantiles."""
+-    h, w = data.shape[1:3]
+-    n = h * w
+-
+-    if sample_pixels is None:
+-        sample_pixels_x = random.sample(range(n), 1)
+-        sample_pixels_y = random.sample(range(n), 1)
+-    else:
+-        assert sample_pixels[0] != sample_pixels[1]
+-        sample_pixels_x = [sample_pixels[0]]
+-        sample_pixels_y = [sample_pixels[1]]
+-
+-    data_ravel = tf.reshape(data, [len(data), n])
+-
+-    sample_x = tf.gather(data_ravel, sample_pixels_x, axis=1)
+-    sample_y = tf.gather(data_ravel, sample_pixels_y, axis=1)
+-
+-    frechet_x = -tf.math.log(1 - sample_x)
+-    frechet_y = -tf.math.log(1 - sample_y)
+-
+-    ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
+-
+-    # transform to original data and Celcius and plot
+-    sample_x = np.quantile(reference_data, sample_x)
+-    sample_y = np.quantile(reference_data, sample_y)
+-
+-    if celcius:
+-        sample_x = kelvinToCelsius(sample_x)
+-        sample_y = kelvinToCelsius(sample_y)
+-
+-    scatter_density(sample_x, sample_y, ax, title=f'$\chi$: {ec_xy:4f}')
+-
+-
+-def scatter_density(x, y, ax, title=''):
+-    xy = np.hstack([x, y]).transpose()
+-    z = gaussian_kde(xy)(xy)
+-    idx = z.argsort()
+-    x, y, z = x[idx], y[idx], z[idx]
+-    ax.scatter(x, y, c=z, s=10)
+-    ax.set_title(title)
+-    return ax
+-
+-
+-def load_for_tf(root, paddings, n_train, output_size=None):
+-    df_train_test = pd.read_csv(root, sep=',',header=None).iloc[1:]
+-
+-    #Load data and view
+-    plt.figure(figsize=(15, 3))
+-    plt.plot(range(2000), df_train_test.iloc[0,:].values.astype(float), linewidth=.5, color='k')
+-    plt.ylabel('Temperature (K)')
+-    plt.title('Time series for single pixel')
+-    plt.show()
+-
+-    df_train_test = df_train_test.values.astype(float).transpose()
+-    n = df_train_test.shape[0]
+-
+-    #train set: need to standardise it separately (as df is ... but then split)
+-    train_set = df_train_test[:n_train,:]
+-
+-    #valid set: need to standardise it separately (as df is ... but then split)
+-    test_set = df_train_test[n_train:,:]
+-
+-    train = tf.convert_to_tensor(train_set, dtype='float32')
+-    train = tf.reshape(train, (n_train, 18, 22, 1))
+-    if output_size is not None:
+-        train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+-#     train = tf.pad(train, paddings)
+-
+-    test = tf.convert_to_tensor(test_set, dtype='float32')
+-    test = tf.reshape(test, (n - n_train, 18, 22, 1))
+-    if output_size is not None:
+-        test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+-
+-    fig, axs = plt.subplots(1, 5, figsize=(15, 3))
+-    for i, ax in enumerate(axs):
+-        im = ax.imshow(train[i, :, :, 0].numpy())
+-    plt.suptitle('Training data (original scale)')
+-    divider = make_axes_locatable(ax)
+-    cax = divider.append_axes('right', size='5%', pad=0.05)
+-    fig.colorbar(im, cax=cax, orientation='vertical')
+-
+-    return train, test
+-
+-
+-def load_and_scale_for_tf(root, paddings, n_train, output_size=None):
+-    df_train_test = pd.read_csv(root, sep=',',header=None).iloc[1:]
+-
+-    #Load data and view
+-    plt.figure(figsize=(15, 3))
+-    plt.plot(range(2000), df_train_test.iloc[0, :].values.astype(float), linewidth=.5, color='k')
+-    plt.ylabel('Temperature (K)')
+-    plt.title('Time series for single pixel')
+-    plt.show()
+-
+-    df_train_test = df_train_test.values.astype(float).transpose()
+-    n = df_train_test.shape[0]
+-
+-    #train set: need to standardise it separately (as df is ... but then split)
+-    train_set = df_train_test[:n_train,:]
+-    train_set = marginal(train_set)
+-
+-    #valid set: need to standardise it separately (as df is ... but then split)
+-    test_set = df_train_test[n_train:,:]
+-    test_set = marginal(test_set)
+-
+-    train = tf.convert_to_tensor(train_set, dtype='float32')
+-    train = tf.reshape(train, (n_train, 18, 22, 1))
+-    if output_size is not None:
+-        train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
++def load_marginals(indir, conditions="all", dim="u10", output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
++    cyclone_marginals_train = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_train.npy"))
++    normal_marginals_train = np.load(os.path.join(indir, f"normal_marginals_{dim}_train.npy"))
++    cyclone_marginals_test = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_test.npy"))
++    normal_marginals_test = np.load(os.path.join(indir, f"normal_marginals_{dim}_test.npy"))
++
++    if conditions == "all":
++        train = np.vstack([cyclone_marginals_train, normal_marginals_train])
++        test = np.vstack([cyclone_marginals_test, normal_marginals_test])
++    elif conditions == "normal":
++        train = normal_marginals_train
++        test = normal_marginals_test
++    elif conditions == "cyclone":
++        train = cyclone_marginals_train
++        test = cyclone_marginals_test
++
++    train_size = len(train)
++    train = tf.convert_to_tensor(train, dtype='float32')
++    train = tf.reshape(train, (train_size, 61, 61, 1))
++    train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+     train = tf.pad(train, paddings)
+ 
+-    test = tf.convert_to_tensor(test_set, dtype='float32')
+-    test = tf.reshape(test, (n - n_train, 18, 22, 1))
+-    if output_size is not None:
+-        test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
++    test_size = len(test)
++    test = tf.convert_to_tensor(test, dtype='float32')
++    test = tf.reshape(test, (test_size, 61, 61, 1))
++    test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+     test = tf.pad(test, paddings)
+ 
+-    fig, axs = plt.subplots(1, 5, figsize=(15, 3))
+-    for i, ax in enumerate(axs):
+-        im = ax.imshow(train[i, :, :, 0].numpy())
+-    plt.suptitle('Training data (scaled)')
+-    divider = make_axes_locatable(ax)
+-    cax = divider.append_axes('right', size='5%', pad=0.05)
+-    fig.colorbar(im, cax=cax, orientation='vertical')
+-
+     return train, test
+ 
+-
+-def load_era5_for_tf(indir, n_train, output_size=(17, 21), conditions='normal', viz=True):
+-    """Load ERA5 data from supplied directories.
+-
+-    Parameters:
+-    -----------
+-    indir : string
+-    n_train : int
+-    output_size : tuple of ints, default=(17, 21)
+-    conditions : string, default='normal'
+-    viz : bool, default=True
+-    """
+-    df = pd.read_csv(indir)
+-    if conditions == 'normal':
+-        df = df[~df['cyclone_flag']]
+-    elif conditions == 'cyclone':
+-        df = df[df['cyclone_flag']]
+-    elif conditions == 'all':
+-        pass
+-    else:
+-        raise Exception("condition must be one of ['normal', 'cyclone', 'all']")
+-    df = df.drop(columns=['cyclone_flag', 'time'])
+-
+-    n = df.shape[1]
+-
+-    #Load data and view
+-    if viz:
+-        plt.figure(figsize=(15, 3))
+-        plt.plot(range(n), df.iloc[0, :].values.astype(float), linewidth=.5, color='k')
+-        plt.ylabel('Wind u10 (mps)')
+-        plt.title('Time series for single pixel')
+-        plt.show()
+-
+-    df = df.values.astype(float)
+-
+-    n = df.shape[0]
+-    print(f"Dataset has {n} entries.")
+-    assert n_train < n, f"Requested train size ({n_train}) exceeds size of dataset ({n})."
+-
+-    train_set = df[:n_train,:]
+-    test_set = df[n_train:,:]
+-
+-    train = tf.convert_to_tensor(train_set, dtype='float32')
+-    train = tf.reshape(train, (n_train, 61, 61, 1))
+-
+-    if output_size is not None:
+-        train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+-
+-    test = tf.convert_to_tensor(test_set, dtype='float32')
+-    test = tf.reshape(test, (n - n_train, 61, 61, 1))
+-    if output_size is not None:
+-        test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+-
+-    if viz:
+-        fig, axs = plt.subplots(1, 5, figsize=(15, 3))
+-        for i, ax in enumerate(axs):
+-            im = ax.imshow(train[i, :, :, 0].numpy())
+-        plt.suptitle('Training data (original scale)')
+-        divider = make_axes_locatable(ax)
+-        cax = divider.append_axes('right', size='5%', pad=0.05)
+-        fig.colorbar(im, cax=cax, orientation='vertical')
+-
++def load_winds(indir, conditions="all", dim="u10"):
++    cyclone_train = np.load(os.path.join(indir, f"cyclone_original_{dim}_train.npy"))
++    normal_train = np.load(os.path.join(indir, f"normal_original_{dim}_train.npy"))
++    cyclone_test = np.load(os.path.join(indir, f"cyclone_original_{dim}_test.npy"))
++    normal_test = np.load(os.path.join(indir, f"normal_original_{dim}_test.npy"))
++
++    if conditions == "all":
++        train = np.vstack([cyclone_train, normal_train])
++        test = np.vstack([cyclone_test, normal_test])
++    elif conditions == "normal":
++        train = normal_train
++        test = normal_test
++    elif conditions == "cyclone":
++        train = cyclone_train
++        test = cyclone_test
++
++    train_size = len(train)
++    train = tf.convert_to_tensor(train, dtype='float32')
++    train = tf.reshape(train, (train_size, 61, 61, 1))
++
++    test_size = len(test)
++    test = tf.convert_to_tensor(test, dtype='float32')
++    test = tf.reshape(test, (test_size, 61, 61, 1))
+     return train, test
+ 
+ 
+-
+-def load_and_scale_era5_for_tf(indir, paddings, n_train, output_size = (17, 21), conditions='normal', viz=False):
+-
+-    df = pd.read_csv(indir)
+-    if conditions == 'normal':
+-        df = df[~df['cyclone_flag']]
+-    elif conditions == 'cyclone':
+-        df = df[df['cyclone_flag']]
+-    elif conditions == 'all':
+-        pass
+-    else:
+-        raise Exception("condition must be one of ['normal', 'cyclone', 'all']")
+-
+-    df = df.drop(columns=['cyclone_flag', 'time'])
+-    n = df.shape[1]
+-
+-    #Load data and view
+-    if viz:
+-        plt.figure(figsize=(15, 3))
+-        plt.plot(range(n), df.iloc[0, :].values.astype(float), linewidth=.5, color='k')
+-        plt.ylabel('Wind u10 (mps)')
+-        plt.title('Time series for single pixel')
+-        plt.show()
+-
+-    df = df.values.astype(float)
+-
+-    n = df.shape[0]
+-    print(f"Dataset has {n} entries.")
+-    assert n_train < n, f"Requested train size ({n_train}) exceeds size of dataset ({n})."
+-
+-    train_set = df[:n_train,:]
+-    train_set = marginal(train_set)
+-    test_set = df[n_train:,:]
+-    test_set = marginal(test_set)
+-
+-    train = tf.convert_to_tensor(train_set, dtype='float32')
+-    train = tf.reshape(train, (n_train, 61, 61, 1))
+-
+-    if output_size is not None:
+-        train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+-    train = tf.pad(train, paddings)
+-
+-    test = tf.convert_to_tensor(test_set, dtype='float32')
+-    test = tf.reshape(test, (n - n_train, 61, 61, 1))
+-    if output_size is not None:
+-        test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+-    test = tf.pad(test, paddings)
+-
+-    if viz:
+-        fig, axs = plt.subplots(1, 5, figsize=(15, 3))
+-        for i, ax in enumerate(axs):
+-            im = ax.imshow(train[i, :, :, 0].numpy())
+-        plt.suptitle('Training data (original scale)')
+-        divider = make_axes_locatable(ax)
+-        cax = divider.append_axes('right', size='5%', pad=0.05)
+-        fig.colorbar(im, cax=cax, orientation='vertical')
+-
+-    return train, test
++def load_test_images(indir, train_size, conditions="all", dims=["u10", "v10"]):
++    """Wrapper function to load ERA5 with certain conditions (for hyperparameter tuning)."""
++    indir = os.path.join(indir, f"train_{train_size}")
++    test_sets = []
++    train_sets = []
++    for dim in dims:
++        train, test = load_winds(indir, conditions, dim)
++        train_sets.append(train[..., 0])
++        test_sets.append(test[..., 0])
++    train_ims = tf.stack(train_sets, axis=-1)
++    test_ims = tf.stack(test_sets, axis=-1)
++    return test_ims
+ 
+ 
+-def load_era5_datasets(roots, n_train, batch_size, im_size, paddings=tf.constant([[0,0],[1,1],[1,1], [0,0]]), conditions="normal", scale=True, viz=False):
++def load_datasets(indir, train_size, batch_size, conditions="all", dims=["u10", "v10"], output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
+     """Wrapper function to load ERA5 with certain conditions (for hyperparameter tuning)."""
++
++    indir = os.path.join(indir, f"train_{train_size}")
+     train_sets = []
+     test_sets = []
+-
+-    for root in roots:
+-        if scale:
+-            train_images, test_images = load_and_scale_era5_for_tf(root, paddings, n_train, im_size, conditions=conditions, viz=viz)
+-        else:
+-            train_images, test_images = load_era5_for_tf(root, n_train, im_size, conditions=conditions, viz=viz)
+-        train_sets.append(train_images[..., 0])
+-        test_sets.append(test_images[..., 0])
++    for dim in dims:
++        train, test = load_marginals(indir, dim=dim, conditions=conditions, output_size=output_size, paddings=paddings)
++        train_sets.append(train[..., 0])
++        test_sets.append(test[..., 0])
+ 
+     # stack them together in multichannel images
+-    train_images = tf.stack(train_sets, axis=-1)
+-    test_images = tf.stack(test_sets, axis=-1)
++    train_ims = tf.stack(train_sets, axis=-1)
++    test_ims = tf.stack(test_sets, axis=-1)
+ 
+     # create datasets
+-    train = tf.data.Dataset.from_tensor_slices(train_images).shuffle(len(train_images)).batch(batch_size)
+-    test = tf.data.Dataset.from_tensor_slices(test_images).shuffle(len(test_images)).batch(batch_size)
++    train = tf.data.Dataset.from_tensor_slices(train_ims).shuffle(len(train_ims)).batch(batch_size)
++    test = tf.data.Dataset.from_tensor_slices(test_ims).shuffle(len(test_ims)).batch(batch_size)
+ 
+-    return train, test, train_images, test_images
++    return train, test
+diff --git a/evtGAN/viz_utils.py b/evtGAN/viz_utils.py
+index 09e9567..07d0707 100644
+--- a/evtGAN/viz_utils.py
++++ b/evtGAN/viz_utils.py
+@@ -9,10 +9,10 @@ from .tf_utils import *
+ 
+ def plot_generated_marginals(fake_data, start=0, channel=0):
+     print(f"Range: [{fake_data.min():.2f}, {fake_data.max():.2f}]")
+-    
++
+     nrows = 10
+     fig, axs = plt.subplots(2, nrows, layout='tight', figsize=(10, 3))
+-    
++
+     for i, ax in enumerate(axs.ravel()[:nrows]):
+         im = ax.imshow(fake_data[start + i, ..., 0], cmap='YlOrRd', vmin=0, vmax=1)
+     axs[0, 0].set_ylabel('u10')
+@@ -20,7 +20,7 @@ def plot_generated_marginals(fake_data, start=0, channel=0):
+     for i, ax in enumerate(axs.ravel()[nrows:]):
+         im = ax.imshow(fake_data[start + i, ..., 1], cmap='YlOrRd', vmin=0, vmax=1)
+     axs[1, 0].set_ylabel('v10')
+-    
++
+     for ax in axs.ravel():
+         ax.set_xticks([])
+         ax.set_yticks([])
+@@ -29,18 +29,53 @@ def plot_generated_marginals(fake_data, start=0, channel=0):
+     cax = divider.append_axes('right', size='5%', pad=0.05)
+     fig.colorbar(im, cax=cax, orientation='vertical')
+     plt.suptitle('Generated marginals')
+-    
++
+     return fig
+ 
+ 
+-def compare_ecs_plot(train_images, test_images, fake_data, train_orig_images, channel=0):
++def plot_sample_density(data, ax, sample_pixels=None):
++    """For generated quantiles."""
++    h, w = data.shape[1:3]
++    n = h * w
++
++    if sample_pixels is None:
++        sample_pixels_x = random.sample(range(n), 1)
++        sample_pixels_y = random.sample(range(n), 1)
++    else:
++        assert sample_pixels[0] != sample_pixels[1]
++        sample_pixels_x = [sample_pixels[0]]
++        sample_pixels_y = [sample_pixels[1]]
++
++    data_ravel = tf.reshape(data, [len(data), n])
++
++    sample_x = tf.gather(data_ravel, sample_pixels_x, axis=1)
++    sample_y = tf.gather(data_ravel, sample_pixels_y, axis=1)
++
++    frechet_x = -tf.math.log(1 - sample_x)
++    frechet_y = -tf.math.log(1 - sample_y)
++
++    ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
++    scatter_density(sample_x, sample_y, ax, title=f'$\chi$: {ec_xy:4f}')
++
++
++def scatter_density(x, y, ax, title=''):
++    xy = np.hstack([x, y]).transpose()
++    z = gaussian_kde(xy)(xy)
++    idx = z.argsort()
++    x, y, z = x[idx], y[idx], z[idx]
++    ax.scatter(x, y, c=z, s=10)
++    ax.set_title(title)
++    return ax
++
++
++def compare_ecs_plot(train_images, test_images, fake_data, channel=0):
+     fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
+ 
+     for i, sample_pixels in enumerate([(35, 60), (39, 60), (50, 395)]):
+         ax = axs[i, :]
+-        plot_sample_density(train_images[..., channel], train_orig_images[..., channel], ax[0], celcius=False, sample_pixels=sample_pixels)
+-        plot_sample_density(test_images[..., channel], train_orig_images[..., channel], ax[1], celcius=False, sample_pixels=sample_pixels)
+-        plot_sample_density(fake_data[..., channel], train_orig_images[..., channel], ax[2], celcius=False, sample_pixels=sample_pixels)
++        plot_sample_density(train_images[..., channel], ax[0], sample_pixels=sample_pixels)
++        plot_sample_density(test_images[..., channel], ax[1], sample_pixels=sample_pixels)
++        plot_sample_density(fake_data[..., channel], ax[2], sample_pixels=sample_pixels)
+ 
+     for axi in axs:
+         for ax in axi:
+@@ -78,16 +113,16 @@ def compare_channels_plot(train_images, test_images, fake_data):
+         for a in ax:
+             a.set_xlabel('u10')
+             a.set_ylabel('v10')
+-            
++
+     return fig
+ 
+ 
+ def plot_one_hundred_marginals(fake_data, channel=0, **plot_kwargs):
+     fig, axs = plt.subplots(10, 10, layout='tight', figsize=(10, 10))
+-    
++
+     for i, ax in enumerate(axs.ravel()):
+         im = ax.imshow(fake_data[i, ..., channel], vmin=0, vmax=1, **plot_kwargs)
+-    
++
+     for ax in axs.ravel():
+         ax.set_xticks([])
+         ax.set_yticks([])
+@@ -96,16 +131,16 @@ def plot_one_hundred_marginals(fake_data, channel=0, **plot_kwargs):
+     cax = divider.append_axes('right', size='5%', pad=0.05)
+     fig.colorbar(im, cax=cax, orientation='vertical')
+     plt.suptitle('Generated marginals')
+-    
++
+     return fig
+ 
+ 
+ def plot_one_hundred_hypothenuses(fake_data, **plot_kwargs):
+     fig, axs = plt.subplots(10, 10, layout='tight', figsize=(10, 10))
+-    
++
+     for i, ax in enumerate(axs.ravel()):
+         im = ax.imshow(fake_data[i, ...], vmin=0, vmax=1, **plot_kwargs)
+-    
++
+     for ax in axs.ravel():
+         ax.set_xticks([])
+         ax.set_yticks([])
+@@ -114,5 +149,5 @@ def plot_one_hundred_hypothenuses(fake_data, **plot_kwargs):
+     cax = divider.append_axes('right', size='5%', pad=0.05)
+     fig.colorbar(im, cax=cax, orientation='vertical')
+     plt.suptitle('Generated marginals')
+-    
+-    return fig
+\ No newline at end of file
++
++    return fig
+diff --git a/figures/.DS_Store b/figures/.DS_Store
+index 85ab04b..86f6de6 100644
+Binary files a/figures/.DS_Store and b/figures/.DS_Store differ
+diff --git a/saved-models/.DS_Store b/saved-models/.DS_Store
+new file mode 100644
+index 0000000..cf26dc8
+Binary files /dev/null and b/saved-models/.DS_Store differ
+diff --git a/saved-models/lilac-pine-10/lilac-pine-10_discriminator_weights.data-00000-of-00001 b/saved-models/lilac-pine-10/lilac-pine-10_discriminator_weights.data-00000-of-00001
+new file mode 100644
+index 0000000..064b121
+Binary files /dev/null and b/saved-models/lilac-pine-10/lilac-pine-10_discriminator_weights.data-00000-of-00001 differ
+diff --git a/saved-models/lilac-pine-10/lilac-pine-10_discriminator_weights.index b/saved-models/lilac-pine-10/lilac-pine-10_discriminator_weights.index
+new file mode 100644
+index 0000000..d49d8c9
+Binary files /dev/null and b/saved-models/lilac-pine-10/lilac-pine-10_discriminator_weights.index differ
+diff --git a/saved-models/lilac-pine-10/lilac-pine-10_generator_weights.data-00000-of-00001 b/saved-models/lilac-pine-10/lilac-pine-10_generator_weights.data-00000-of-00001
+new file mode 100644
+index 0000000..b6fafd9
+Binary files /dev/null and b/saved-models/lilac-pine-10/lilac-pine-10_generator_weights.data-00000-of-00001 differ
+diff --git a/saved-models/lilac-pine-10/lilac-pine-10_generator_weights.index b/saved-models/lilac-pine-10/lilac-pine-10_generator_weights.index
+new file mode 100644
+index 0000000..8b0895b
+Binary files /dev/null and b/saved-models/lilac-pine-10/lilac-pine-10_generator_weights.index differ
+diff --git a/saved-models/lively-tree-40/lively-tree-40_discriminator_weights.data-00000-of-00001 b/saved-models/lively-tree-40/lively-tree-40_discriminator_weights.data-00000-of-00001
+new file mode 100644
+index 0000000..af66cc3
+Binary files /dev/null and b/saved-models/lively-tree-40/lively-tree-40_discriminator_weights.data-00000-of-00001 differ
+diff --git a/saved-models/lively-tree-40/lively-tree-40_discriminator_weights.index b/saved-models/lively-tree-40/lively-tree-40_discriminator_weights.index
+new file mode 100644
+index 0000000..4bc1271
+Binary files /dev/null and b/saved-models/lively-tree-40/lively-tree-40_discriminator_weights.index differ
+diff --git a/saved-models/lively-tree-40/lively-tree-40_generator_weights.data-00000-of-00001 b/saved-models/lively-tree-40/lively-tree-40_generator_weights.data-00000-of-00001
+new file mode 100644
+index 0000000..1bf2665
+Binary files /dev/null and b/saved-models/lively-tree-40/lively-tree-40_generator_weights.data-00000-of-00001 differ
+diff --git a/saved-models/lively-tree-40/lively-tree-40_generator_weights.index b/saved-models/lively-tree-40/lively-tree-40_generator_weights.index
+new file mode 100644
+index 0000000..b254338
+Binary files /dev/null and b/saved-models/lively-tree-40/lively-tree-40_generator_weights.index differ
+diff --git a/scripts/.DS_Store b/scripts/.DS_Store
+new file mode 100644
+index 0000000..b3df197
+Binary files /dev/null and b/scripts/.DS_Store differ
+diff --git a/scripts/train_dcgan.py b/scripts/train_dcgan.py
+index 5bfe563..2df23ee 100644
+--- a/scripts/train_dcgan.py
++++ b/scripts/train_dcgan.py
+@@ -6,6 +6,7 @@ Note, requires config to create new model too.
+ """
+ 
+ import os
++import numpy as np
+ from datetime import datetime
+ import tensorflow as tf
+ tf.config.set_visible_devices([], 'GPU')
+@@ -15,22 +16,21 @@ from wandb.keras import WandbCallback
+ import matplotlib.pyplot as plt
+ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
+ 
+-import DCGAN
+-import tf_utils
+-import viz_utils
++from evtGAN import ChiScore, CrossEntropy, DCGAN, tf_utils, viz_utils, compile_dcgan
+ 
+-plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
++global rundir
+ 
++plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
+ 
+ # some static variables
+-paddings = tf.constant([[0,0],[1,1],[1,1], [0,0]])
++paddings = tf.constant([[0,0], [1,1], [1,1], [0,0]])
+ var = 'wind'
+ conditions = "all"
+ im_size = (19, 23)
+ cwd = os.getcwd()
+ wd = os.path.join(cwd, "..")
+-roots = [os.path.join(wd, "wind_data", "u10_dailymax.csv"), os.path.join(wd, "wind_data", "v10_dailymax.csv")]
+-imdir = os.path.join(cwd, 'figures', 'temp')
++indir = "/Users/alison/Documents/DPhil/multivariate/processed_wind_data"
++imdir = os.path.join(wd, 'figures', 'temp')
+ 
+ 
+ def log_image_to_wandb(fig, name:str, dir:str):
+@@ -40,41 +40,52 @@ def log_image_to_wandb(fig, name:str, dir:str):
+ 
+ 
+ def main(config):
+-    train, test, train_images, test_images = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, viz=False)
+-    _, _, orig_images, _ = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, scale=True, viz=False)
++    # load data
++    train, test = tf_utils.load_datasets(indir, config.train_size, config.batch_size, conditions=conditions)
++    train_images, test_images = tf_utils.load_test_images(indir, config.train_size, conditions=conditions)
++
++    params_u10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_u10_train.npy"))
++    params_v10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_v10_train.npy"))
+ 
+     # train test callbacks
+-    chi_score = DCGAN.ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
+-    cross_entropy = DCGAN.CrossEntropy(next(iter(test)))
++    chi_score = ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
++    cross_entropy = CrossEntropy(next(iter(test)))
+ 
+     # compile
+     with tf.device('/gpu:0'):
+-        gan = DCGAN.compile_dcgan(config)
++        gan = compile_dcgan(config)
+         gan.fit(train, epochs=config.nepochs, callbacks=[WandbCallback(), chi_score, cross_entropy])
+ 
+-    finish_time = datetime.now().strftime("%Y%m%d")
+-    gan.generator.save_weights(os.path.join(wd, 'saved_models', f'{finish_time}_generator_weights'))
+-    gan.discriminator.save_weights(os.path.join(wd, 'saved_models', f'{finish_time}_discriminator_weights'))
++    gan.generator.save_weights(os.path.join(rundir, f'generator_weights'))
++    gan.discriminator.save_weights(os.path.join(rundir, f'discriminator_weights'))
+ 
+     # generate 1000 images to visualise some results
+-    synthetic_data = gan(1000)
+-    synthetic_data = tf_utils.tf_unpad(synthetic_data, paddings).numpy()
++    fake_marginals = gan(1000)
++    fake_marginals = tf_utils.tf_unpad(fake_marginals, paddings)
++    fake_winds = tf_utils.marginals_to_winds(fake_marginals, (params_u10, params_v10))
+ 
+-    fig = viz_utils.plot_generated_marginals(synthetic_data)
+-    log_image_to_wandb(fig, 'generated_marginals', imdir)
++    fig = viz_utils.plot_generated_marginals(fake_marginals)
++    log_image_to_wandb(fig, f'generated_marginals', imdir)
+ 
+-    fig = viz_utils.compare_ecs_plot(train_images, test_images, synthetic_data, orig_images, channel=0)
++    # TODO: modify to use params
++
++    import pdb; pdb.set_trace()
++    fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, channel=0)
+     log_image_to_wandb(fig, 'correlations_u10', imdir)
+ 
+-    fig = viz_utils.compare_ecs_plot(train_images, test_images, synthetic_data, orig_images, channel=1)
++    fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, channel=1)
+     log_image_to_wandb(fig, 'correlations_v10', imdir)
+ 
+-    fig = viz_utils.compare_channels_plot(train_images, test_images, synthetic_data)
++    fig = viz_utils.compare_channels_plot(train_images, test_images, fake_winds)
+     log_image_to_wandb(fig, 'correlations multivariate', imdir)
+ 
+ 
+ if __name__ == "__main__":
+     wandb.init(settings=wandb.Settings(code_dir="."))
++
++    rundir = os.path.join(cwd, "saved-models", wandb.run.name)
++    os.makedirs(rundir)
++
+     tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf
+     tf.config.experimental.enable_op_determinism()  # removes stochasticity from individual operations
+     main(wandb.config)
+diff --git a/scripts/wandb/.DS_Store b/scripts/wandb/.DS_Store
+new file mode 100644
+index 0000000..7d42a44
+Binary files /dev/null and b/scripts/wandb/.DS_Store differ
+diff --git a/scripts/wandb/latest-run b/scripts/wandb/latest-run
+new file mode 120000
+index 0000000..d9bf94a
+--- /dev/null
++++ b/scripts/wandb/latest-run
+@@ -0,0 +1 @@
++run-20230727_180508-f8zf200n
+\ No newline at end of file
+diff --git a/scripts/wandb/run-20230727_113111-ljnpv0oh/files/code/scripts/train_dcgan.py b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/code/scripts/train_dcgan.py
+new file mode 100644
+index 0000000..16169c1
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/code/scripts/train_dcgan.py
+@@ -0,0 +1,84 @@
++"""
++Note, requires config to create new model too.
++>>> new_gan = DCGAN.DCGAN(config)
++>>> new_gan.generator.load_weights(os.path.join(wd, 'saved_models', f'{finish_time}_generator_weights'))
++>>> new_gan.discriminator.load_weights(os.path.join(wd, 'saved_models', f'{finish_time}_discriminator_weights'))
++"""
++
++import os
++from datetime import datetime
++import tensorflow as tf
++tf.config.set_visible_devices([], 'GPU')
++import wandb
++from wandb.keras import WandbCallback
++
++import matplotlib.pyplot as plt
++from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
++
++from evtGAN import DCGAN, tf_utils, viz_utils
++
++global rundir
++
++plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
++
++# some static variables
++paddings = tf.constant([[0,0],[1,1],[1,1], [0,0]])
++var = 'wind'
++conditions = "all"
++im_size = (19, 23)
++cwd = os.getcwd()
++wd = os.path.join(cwd, "..")
++roots = [os.path.join(wd, "..", "wind_data", "u10_dailymax.csv"), os.path.join(wd, "..", "wind_data", "v10_dailymax.csv")]
++imdir = os.path.join(cwd, 'figures', 'temp')
++
++
++def log_image_to_wandb(fig, name:str, dir:str):
++    impath = os.path.join(dir, f"{name}.png")
++    fig.savefig(impath, **plot_kwargs)
++    wandb.log({name: wandb.Image(impath)})
++
++
++def main(config):
++    train, test, train_images, test_images = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, viz=False)
++    _, _, orig_images, _ = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, scale=True, viz=False)
++
++    # train test callbacks
++    chi_score = DCGAN.ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
++    cross_entropy = DCGAN.CrossEntropy(next(iter(test)))
++
++    import pdb; pdb.set_trace()
++    # compile
++    with tf.device('/gpu:0'):
++        gan = DCGAN.compile_dcgan(config)
++        gan.fit(train, epochs=config.nepochs, callbacks=[WandbCallback(), chi_score, cross_entropy])
++
++    finish_time = datetime.now().strftime("%Y%m%d")
++    gan.generator.save_weights(os.path.join(wd, 'saved_models', f'{finish_time}_generator_weights'))
++    gan.discriminator.save_weights(os.path.join(wd, 'saved_models', f'{finish_time}_discriminator_weights'))
++
++    # generate 1000 images to visualise some results
++    synthetic_data = gan(1000)
++    synthetic_data = tf_utils.tf_unpad(synthetic_data, paddings).numpy()
++
++    fig = viz_utils.plot_generated_marginals(synthetic_data)
++    log_image_to_wandb(fig, 'generated_marginals', imdir)
++
++    fig = viz_utils.compare_ecs_plot(train_images, test_images, synthetic_data, orig_images, channel=0)
++    log_image_to_wandb(fig, 'correlations_u10', imdir)
++
++    fig = viz_utils.compare_ecs_plot(train_images, test_images, synthetic_data, orig_images, channel=1)
++    log_image_to_wandb(fig, 'correlations_v10', imdir)
++
++    fig = viz_utils.compare_channels_plot(train_images, test_images, synthetic_data)
++    log_image_to_wandb(fig, 'correlations multivariate', imdir)
++
++
++if __name__ == "__main__":
++    wandb.init(settings=wandb.Settings(code_dir="."))
++
++    rundir = os.path.join(cwd, "saved-models", wandb.run.name)
++    os.makedirs(rundir)
++
++    tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf
++    tf.config.experimental.enable_op_determinism()  # removes stochasticity from individual operations
++    main(wandb.config)
+diff --git a/scripts/wandb/run-20230727_113111-ljnpv0oh/files/conda-environment.yaml b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/conda-environment.yaml
+new file mode 100644
+index 0000000..e1ba2c2
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/conda-environment.yaml
+@@ -0,0 +1,264 @@
++name: tensorflow
++channels:
++  - apple
++  - conda-forge
++  - defaults
++dependencies:
++  - anyio=3.7.1=pyhd8ed1ab_0
++  - appnope=0.1.3=pyhd8ed1ab_0
++  - argon2-cffi=21.3.0=pyhd8ed1ab_0
++  - argon2-cffi-bindings=21.2.0=py310h8e9501a_3
++  - asttokens=2.2.1=pyhd8ed1ab_0
++  - attrs=23.1.0=pyh71513ae_1
++  - backcall=0.2.0=pyh9f0ad1d_0
++  - backports=1.0=pyhd8ed1ab_3
++  - backports.functools_lru_cache=1.6.5=pyhd8ed1ab_0
++  - beautifulsoup4=4.12.2=pyha770c72_0
++  - bleach=6.0.0=pyhd8ed1ab_0
++  - brotli=1.0.9=h1a8c8d9_9
++  - brotli-bin=1.0.9=h1a8c8d9_9
++  - brotli-python=1.0.9=py310h0f1eb42_9
++  - bzip2=1.0.8=h3422bc3_4
++  - c-ares=1.19.1=hb547adb_0
++  - ca-certificates=2023.5.7=hf0a4a13_0
++  - cached-property=1.5.2=hd8ed1ab_1
++  - cached_property=1.5.2=pyha770c72_1
++  - certifi=2023.5.7=pyhd8ed1ab_0
++  - cffi=1.15.1=py310h2399d43_3
++  - charset-normalizer=3.2.0=pyhd8ed1ab_0
++  - comm=0.1.3=pyhd8ed1ab_0
++  - contourpy=1.1.0=py310h38f39d4_0
++  - cycler=0.11.0=pyhd8ed1ab_0
++  - debugpy=1.6.7=py310h0f1eb42_0
++  - decorator=5.1.1=pyhd8ed1ab_0
++  - defusedxml=0.7.1=pyhd8ed1ab_0
++  - entrypoints=0.4=pyhd8ed1ab_0
++  - exceptiongroup=1.1.2=pyhd8ed1ab_0
++  - executing=1.2.0=pyhd8ed1ab_0
++  - flit-core=3.9.0=pyhd8ed1ab_0
++  - fonttools=4.40.0=py310h2aa6e3c_0
++  - freetype=2.12.1=hd633e50_1
++  - h5py=3.6.0=nompi_py310hb8bbf05_100
++  - hdf5=1.12.1=nompi_hd9dbc9e_104
++  - idna=3.4=pyhd8ed1ab_0
++  - importlib-metadata=6.8.0=pyha770c72_0
++  - importlib_metadata=6.8.0=hd8ed1ab_0
++  - importlib_resources=6.0.0=pyhd8ed1ab_1
++  - ipykernel=6.24.0=pyh5fb750a_0
++  - ipython=8.14.0=pyhd1c38e8_0
++  - ipython_genutils=0.2.0=py_1
++  - jedi=0.18.2=pyhd8ed1ab_0
++  - jinja2=3.1.2=pyhd8ed1ab_1
++  - jsonschema=4.18.0=pyhd8ed1ab_0
++  - jsonschema-specifications=2023.6.1=pyhd8ed1ab_0
++  - jupyter_client=8.3.0=pyhd8ed1ab_0
++  - jupyter_core=5.3.1=py310hbe9552e_0
++  - jupyter_events=0.6.3=pyhd8ed1ab_0
++  - jupyter_server=2.7.0=pyhd8ed1ab_0
++  - jupyter_server_terminals=0.4.4=pyhd8ed1ab_1
++  - jupyterlab_pygments=0.2.2=pyhd8ed1ab_0
++  - kiwisolver=1.4.4=py310h2887b22_1
++  - krb5=1.20.1=h69eda48_0
++  - lcms2=2.15=hd835a16_1
++  - lerc=4.0.0=h9a09cb3_0
++  - libblas=3.9.0=17_osxarm64_openblas
++  - libbrotlicommon=1.0.9=h1a8c8d9_9
++  - libbrotlidec=1.0.9=h1a8c8d9_9
++  - libbrotlienc=1.0.9=h1a8c8d9_9
++  - libcblas=3.9.0=17_osxarm64_openblas
++  - libcurl=8.1.2=h912dcd9_0
++  - libcxx=16.0.6=h4653b0c_0
++  - libdeflate=1.18=h1a8c8d9_0
++  - libedit=3.1.20191231=hc8eb9b7_2
++  - libev=4.33=h642e427_1
++  - libffi=3.4.2=h3422bc3_5
++  - libgfortran=5.0.0=12_2_0_hd922786_31
++  - libgfortran5=12.2.0=h0eea778_31
++  - libjpeg-turbo=2.1.5.1=h1a8c8d9_0
++  - liblapack=3.9.0=17_osxarm64_openblas
++  - libnghttp2=1.52.0=hae82a92_0
++  - libopenblas=0.3.23=openmp_hc731615_0
++  - libpng=1.6.39=h76d750c_0
++  - libprotobuf=3.19.6=hb5ab8b9_0
++  - libsodium=1.0.18=h27ca646_1
++  - libsqlite=3.42.0=hb31c410_0
++  - libssh2=1.11.0=h7a5bd25_0
++  - libtiff=4.5.1=h23a1a89_0
++  - libwebp-base=1.3.1=hb547adb_0
++  - libxcb=1.15=hf346824_0
++  - libzlib=1.2.13=h53f4e23_5
++  - llvm-openmp=16.0.6=h1c12783_0
++  - markupsafe=2.1.3=py310h2aa6e3c_0
++  - matplotlib=3.7.2=py310hb6292c7_0
++  - matplotlib-base=3.7.2=py310h49faba3_0
++  - matplotlib-inline=0.1.6=pyhd8ed1ab_0
++  - mistune=3.0.0=pyhd8ed1ab_0
++  - munkres=1.1.4=pyh9f0ad1d_0
++  - nbclassic=1.0.0=pyhb4ecaf3_1
++  - nbclient=0.8.0=pyhd8ed1ab_0
++  - nbconvert=7.6.0=pyhd8ed1ab_0
++  - nbconvert-core=7.6.0=pyhd8ed1ab_0
++  - nbconvert-pandoc=7.6.0=pyhd8ed1ab_0
++  - nbformat=5.9.1=pyhd8ed1ab_0
++  - ncurses=6.4=h7ea286d_0
++  - nest-asyncio=1.5.6=pyhd8ed1ab_0
++  - notebook=6.5.4=pyha770c72_0
++  - notebook-shim=0.2.3=pyhd8ed1ab_0
++  - numpy=1.23.2=py310h127c7cf_0
++  - openjpeg=2.5.0=hbc2ba62_2
++  - openssl=3.1.1=h53f4e23_1
++  - overrides=7.3.1=pyhd8ed1ab_0
++  - packaging=23.1=pyhd8ed1ab_0
++  - pandas=2.0.3=py310h1cdf563_1
++  - pandoc=3.1.3=hce30654_0
++  - pandocfilters=1.5.0=pyhd8ed1ab_0
++  - parso=0.8.3=pyhd8ed1ab_0
++  - pexpect=4.8.0=pyh1a96a4e_2
++  - pickleshare=0.7.5=py_1003
++  - pillow=10.0.0=py310h60ecbdf_0
++  - pip=23.1.2=pyhd8ed1ab_0
++  - pkgutil-resolve-name=1.3.10=pyhd8ed1ab_0
++  - platformdirs=3.8.1=pyhd8ed1ab_0
++  - pooch=1.7.0=pyha770c72_3
++  - prometheus_client=0.17.1=pyhd8ed1ab_0
++  - prompt-toolkit=3.0.39=pyha770c72_0
++  - prompt_toolkit=3.0.39=hd8ed1ab_0
++  - psutil=5.9.5=py310h8e9501a_0
++  - pthread-stubs=0.4=h27ca646_1001
++  - ptyprocess=0.7.0=pyhd3deb0d_0
++  - pure_eval=0.2.2=pyhd8ed1ab_0
++  - pycparser=2.21=pyhd8ed1ab_0
++  - pygments=2.15.1=pyhd8ed1ab_0
++  - pyobjc-core=9.2=py310hd07e440_0
++  - pyobjc-framework-cocoa=9.2=py310hd07e440_0
++  - pyparsing=3.0.9=pyhd8ed1ab_0
++  - pysocks=1.7.1=pyha2e5f31_6
++  - python=3.10.12=h01493a6_0_cpython
++  - python-dateutil=2.8.2=pyhd8ed1ab_0
++  - python-fastjsonschema=2.17.1=pyhd8ed1ab_0
++  - python-json-logger=2.0.7=pyhd8ed1ab_0
++  - python-tzdata=2023.3=pyhd8ed1ab_0
++  - python_abi=3.10=3_cp310
++  - pytz=2023.3=pyhd8ed1ab_0
++  - pyyaml=6.0=py310h8e9501a_5
++  - pyzmq=25.1.0=py310h30b7201_0
++  - readline=8.2=h92ec313_1
++  - referencing=0.29.1=pyhd8ed1ab_0
++  - requests=2.31.0=pyhd8ed1ab_0
++  - rfc3339-validator=0.1.4=pyhd8ed1ab_0
++  - rfc3986-validator=0.1.1=pyh9f0ad1d_0
++  - rpds-py=0.8.10=py310had9acf8_0
++  - scipy=1.11.1=py310h0975f3d_0
++  - send2trash=1.8.2=pyhd1c38e8_0
++  - setuptools=68.0.0=pyhd8ed1ab_0
++  - six=1.16.0=pyh6c4a22f_0
++  - sniffio=1.3.0=pyhd8ed1ab_0
++  - soupsieve=2.3.2.post1=pyhd8ed1ab_0
++  - stack_data=0.6.2=pyhd8ed1ab_0
++  - tensorflow-deps=2.10.0=0
++  - terminado=0.17.1=pyhd1c38e8_0
++  - tinycss2=1.2.1=pyhd8ed1ab_0
++  - tk=8.6.12=he1e0b03_0
++  - tornado=6.3.2=py310h2aa6e3c_0
++  - traitlets=5.9.0=pyhd8ed1ab_0
++  - typing-extensions=4.7.1=hd8ed1ab_0
++  - typing_extensions=4.7.1=pyha770c72_0
++  - typing_utils=0.1.0=pyhd8ed1ab_0
++  - tzdata=2023c=h71feb2d_0
++  - unicodedata2=15.0.0=py310h8e9501a_0
++  - wcwidth=0.2.6=pyhd8ed1ab_0
++  - webencodings=0.5.1=py_1
++  - websocket-client=1.6.1=pyhd8ed1ab_0
++  - wheel=0.40.0=pyhd8ed1ab_0
++  - xorg-libxau=1.0.11=hb547adb_0
++  - xorg-libxdmcp=1.1.3=h27ca646_0
++  - xz=5.2.6=h57fd34a_0
++  - yaml=0.2.5=h3422bc3_2
++  - zeromq=4.3.4=hbdafb3b_1
++  - zipp=3.16.0=pyhd8ed1ab_1
++  - zlib=1.2.13=h53f4e23_5
++  - zstd=1.5.2=h4f39d0f_7
++  - pip:
++      - absl-py==1.4.0
++      - appdirs==1.4.4
++      - array-record==0.4.0
++      - astunparse==1.6.3
++      - cachetools==5.3.1
++      - click==8.1.4
++      - click-plugins==1.1.1
++      - cligj==0.7.2
++      - cloudpickle==2.2.1
++      - cython==0.29.36
++      - dask==2023.3.2
++      - descartes==1.1.0
++      - dm-tree==0.1.8
++      - docker-pycreds==0.4.0
++      - etils==1.3.0
++      - fiona==1.9.4.post1
++      - flatbuffers==23.5.26
++      - fsspec==2023.6.0
++      - gast==0.4.0
++      - geopandas==0.13.2
++      - gitdb==4.0.10
++      - gitpython==3.1.32
++      - google-auth==2.21.0
++      - google-auth-oauthlib==1.0.0
++      - google-pasta==0.2.0
++      - googleapis-common-protos==1.59.1
++      - grpcio==1.56.0
++      - hdbscan==0.8.33
++      - jax==0.4.13
++      - joblib==1.3.1
++      - keras==2.12.0
++      - keras-core==0.1.2
++      - keras-cv==0.6.1
++      - libclang==16.0.0
++      - locket==1.0.0
++      - markdown==3.4.3
++      - markdown-it-py==3.0.0
++      - mdurl==0.1.2
++      - ml-dtypes==0.2.0
++      - namex==0.0.7
++      - oauthlib==3.2.2
++      - opt-einsum==3.3.0
++      - partd==1.4.0
++      - pathtools==0.1.2
++      - patsy==0.5.3
++      - prettytable==3.8.0
++      - promise==2.3
++      - protobuf==4.23.4
++      - pyarrow==12.0.1
++      - pyasn1==0.5.0
++      - pyasn1-modules==0.3.0
++      - pyinterpolate==0.4.2
++      - pyogrio==0.6.0
++      - pyproj==3.6.0
++      - regex==2023.6.3
++      - requests-oauthlib==1.3.1
++      - rich==13.4.2
++      - rsa==4.9
++      - rtree==1.0.1
++      - scikit-learn==1.3.0
++      - sentry-sdk==1.28.0
++      - setproctitle==1.3.2
++      - shapely==2.0.1
++      - smmap==5.0.0
++      - statsmodels==0.14.0
++      - tensorboard==2.12.3
++      - tensorboard-data-server==0.7.1
++      - tensorflow-datasets==4.9.2
++      - tensorflow-estimator==2.12.0
++      - tensorflow-macos==2.12.0
++      - tensorflow-metadata==1.13.1
++      - tensorflow-metal==0.8.0
++      - tensorflow-probability==0.20.1
++      - termcolor==2.3.0
++      - threadpoolctl==3.2.0
++      - toml==0.10.2
++      - toolz==0.12.0
++      - tqdm==4.65.0
++      - urllib3==1.26.16
++      - wandb==0.15.5
++      - werkzeug==2.3.6
++      - wrapt==1.14.1
++prefix: /Users/alison/mambaforge/envs/tensorflow
+diff --git a/scripts/wandb/run-20230727_113111-ljnpv0oh/files/config.yaml b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/config.yaml
+new file mode 100644
+index 0000000..7c322af
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/config.yaml
+@@ -0,0 +1,28 @@
++wandb_version: 1
++
++_wandb:
++  desc: null
++  value:
++    code_path: code/scripts/train_dcgan.py
++    python_version: 3.10.12
++    cli_version: 0.15.5
++    framework: keras
++    is_jupyter_run: false
++    is_kaggle_kernel: false
++    start_time: 1690453871.897953
++    t:
++      1:
++      - 2
++      - 3
++      - 55
++      2:
++      - 2
++      - 3
++      - 55
++      3:
++      - 23
++      4: 3.10.12
++      5: 0.15.5
++      8:
++      - 4
++      - 5
+diff --git a/scripts/wandb/run-20230727_113111-ljnpv0oh/files/diff.patch b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/diff.patch
+new file mode 100644
+index 0000000..69ea2a3
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/diff.patch
+@@ -0,0 +1,51 @@
++diff --git a/.DS_Store b/.DS_Store
++index 53558da..533811d 100644
++Binary files a/.DS_Store and b/.DS_Store differ
++diff --git a/scripts/train_dcgan.py b/scripts/train_dcgan.py
++index 5bfe563..16169c1 100644
++--- a/scripts/train_dcgan.py
+++++ b/scripts/train_dcgan.py
++@@ -15,12 +15,11 @@ from wandb.keras import WandbCallback
++ import matplotlib.pyplot as plt
++ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
++ 
++-import DCGAN
++-import tf_utils
++-import viz_utils
+++from evtGAN import DCGAN, tf_utils, viz_utils
++ 
++-plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
+++global rundir
++ 
+++plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
++ 
++ # some static variables
++ paddings = tf.constant([[0,0],[1,1],[1,1], [0,0]])
++@@ -29,7 +28,7 @@ conditions = "all"
++ im_size = (19, 23)
++ cwd = os.getcwd()
++ wd = os.path.join(cwd, "..")
++-roots = [os.path.join(wd, "wind_data", "u10_dailymax.csv"), os.path.join(wd, "wind_data", "v10_dailymax.csv")]
+++roots = [os.path.join(wd, "..", "wind_data", "u10_dailymax.csv"), os.path.join(wd, "..", "wind_data", "v10_dailymax.csv")]
++ imdir = os.path.join(cwd, 'figures', 'temp')
++ 
++ 
++@@ -47,6 +46,7 @@ def main(config):
++     chi_score = DCGAN.ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
++     cross_entropy = DCGAN.CrossEntropy(next(iter(test)))
++ 
+++    import pdb; pdb.set_trace()
++     # compile
++     with tf.device('/gpu:0'):
++         gan = DCGAN.compile_dcgan(config)
++@@ -75,6 +75,10 @@ def main(config):
++ 
++ if __name__ == "__main__":
++     wandb.init(settings=wandb.Settings(code_dir="."))
+++
+++    rundir = os.path.join(cwd, "saved-models", wandb.run.name)
+++    os.makedirs(rundir)
+++
++     tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf
++     tf.config.experimental.enable_op_determinism()  # removes stochasticity from individual operations
++     main(wandb.config)
+diff --git a/scripts/wandb/run-20230727_113111-ljnpv0oh/files/requirements.txt b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/requirements.txt
+new file mode 100644
+index 0000000..fcaefac
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/requirements.txt
+@@ -0,0 +1,194 @@
++absl-py==1.4.0
++anyio==3.7.1
++appdirs==1.4.4
++appnope==0.1.3
++argon2-cffi-bindings==21.2.0
++argon2-cffi==21.3.0
++array-record==0.4.0
++asttokens==2.2.1
++astunparse==1.6.3
++attrs==23.1.0
++backcall==0.2.0
++backports.functools-lru-cache==1.6.5
++beautifulsoup4==4.12.2
++bleach==6.0.0
++brotli==1.0.9
++cached-property==1.5.2
++cachetools==5.3.1
++certifi==2023.5.7
++cffi==1.15.1
++charset-normalizer==3.2.0
++click-plugins==1.1.1
++click==8.1.4
++cligj==0.7.2
++cloudpickle==2.2.1
++comm==0.1.3
++contourpy==1.1.0
++cycler==0.11.0
++cython==0.29.36
++dask==2023.3.2
++debugpy==1.6.7
++decorator==5.1.1
++defusedxml==0.7.1
++descartes==1.1.0
++dm-tree==0.1.8
++docker-pycreds==0.4.0
++entrypoints==0.4
++etils==1.3.0
++evtgan==0.1
++exceptiongroup==1.1.2
++executing==1.2.0
++fastjsonschema==2.17.1
++fiona==1.9.4.post1
++flatbuffers==23.5.26
++flit-core==3.9.0
++fonttools==4.40.0
++fsspec==2023.6.0
++gast==0.4.0
++geopandas==0.13.2
++gitdb==4.0.10
++gitpython==3.1.32
++google-auth-oauthlib==1.0.0
++google-auth==2.21.0
++google-pasta==0.2.0
++googleapis-common-protos==1.59.1
++grpcio==1.56.0
++h5py==3.6.0
++hdbscan==0.8.33
++idna==3.4
++importlib-metadata==6.8.0
++importlib-resources==6.0.0
++ipykernel==6.24.0
++ipython-genutils==0.2.0
++ipython==8.14.0
++jax==0.4.13
++jedi==0.18.2
++jinja2==3.1.2
++joblib==1.3.1
++jsonschema-specifications==2023.6.1
++jsonschema==4.18.0
++jupyter-client==8.3.0
++jupyter-core==5.3.1
++jupyter-events==0.6.3
++jupyter-server-terminals==0.4.4
++jupyter-server==2.7.0
++jupyterlab-pygments==0.2.2
++keras-core==0.1.2
++keras-cv==0.6.1
++keras==2.12.0
++kiwisolver==1.4.4
++libclang==16.0.0
++locket==1.0.0
++markdown-it-py==3.0.0
++markdown==3.4.3
++markupsafe==2.1.3
++matplotlib-inline==0.1.6
++matplotlib==3.7.2
++mdurl==0.1.2
++mistune==3.0.0
++ml-dtypes==0.2.0
++munkres==1.1.4
++namex==0.0.7
++nbclassic==1.0.0
++nbclient==0.8.0
++nbconvert==7.6.0
++nbformat==5.9.1
++nest-asyncio==1.5.6
++notebook-shim==0.2.3
++notebook==6.5.4
++numpy==1.23.2
++oauthlib==3.2.2
++opt-einsum==3.3.0
++overrides==7.3.1
++packaging==23.1
++pandas==2.0.3
++pandocfilters==1.5.0
++parso==0.8.3
++partd==1.4.0
++pathtools==0.1.2
++patsy==0.5.3
++pexpect==4.8.0
++pickleshare==0.7.5
++pillow==10.0.0
++pip==23.1.2
++pkgutil-resolve-name==1.3.10
++platformdirs==3.8.1
++pooch==1.7.0
++prettytable==3.8.0
++prometheus-client==0.17.1
++promise==2.3
++prompt-toolkit==3.0.39
++protobuf==4.23.4
++psutil==5.9.5
++ptyprocess==0.7.0
++pure-eval==0.2.2
++pyarrow==12.0.1
++pyasn1-modules==0.3.0
++pyasn1==0.5.0
++pycparser==2.21
++pygments==2.15.1
++pyinterpolate==0.4.2
++pyobjc-core==9.2
++pyobjc-framework-cocoa==9.2
++pyogrio==0.6.0
++pyparsing==3.0.9
++pyproj==3.6.0
++pysocks==1.7.1
++python-dateutil==2.8.2
++python-json-logger==2.0.7
++pytz==2023.3
++pyyaml==6.0
++pyzmq==25.1.0
++referencing==0.29.1
++regex==2023.6.3
++requests-oauthlib==1.3.1
++requests==2.31.0
++rfc3339-validator==0.1.4
++rfc3986-validator==0.1.1
++rich==13.4.2
++rpds-py==0.8.10
++rsa==4.9
++rtree==1.0.1
++scikit-learn==1.3.0
++scipy==1.11.1
++send2trash==1.8.2
++sentry-sdk==1.28.0
++setproctitle==1.3.2
++setuptools==68.0.0
++shapely==2.0.1
++six==1.16.0
++smmap==5.0.0
++sniffio==1.3.0
++soupsieve==2.3.2.post1
++stack-data==0.6.2
++statsmodels==0.14.0
++tensorboard-data-server==0.7.1
++tensorboard==2.12.3
++tensorflow-datasets==4.9.2
++tensorflow-estimator==2.12.0
++tensorflow-macos==2.12.0
++tensorflow-metadata==1.13.1
++tensorflow-metal==0.8.0
++tensorflow-probability==0.20.1
++termcolor==2.3.0
++terminado==0.17.1
++threadpoolctl==3.2.0
++tinycss2==1.2.1
++toml==0.10.2
++toolz==0.12.0
++tornado==6.3.2
++tqdm==4.65.0
++traitlets==5.9.0
++typing-extensions==4.7.1
++typing-utils==0.1.0
++tzdata==2023.3
++unicodedata2==15.0.0
++urllib3==1.26.16
++wandb==0.15.5
++wcwidth==0.2.6
++webencodings==0.5.1
++websocket-client==1.6.1
++werkzeug==2.3.6
++wheel==0.40.0
++wrapt==1.14.1
++zipp==3.16.0
+\ No newline at end of file
+diff --git a/scripts/wandb/run-20230727_113111-ljnpv0oh/files/wandb-metadata.json b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/wandb-metadata.json
+new file mode 100644
+index 0000000..3f1bdb6
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/wandb-metadata.json
+@@ -0,0 +1,34 @@
++{
++    "os": "macOS-12.5.1-arm64-arm-64bit",
++    "python": "3.10.12",
++    "heartbeatAt": "2023-07-27T10:31:12.699291",
++    "startedAt": "2023-07-27T10:31:11.887654",
++    "docker": null,
++    "cuda": null,
++    "args": [],
++    "state": "running",
++    "program": "/Users/alison/Documents/DPhil/multivariate/cycloneGAN/scripts/train_dcgan.py",
++    "codePath": "scripts/train_dcgan.py",
++    "git": {
++        "remote": "git@github.com:alisonpeard/cycloneGAN.git",
++        "commit": "cda095f32b7ed64df3974fd77bc182995e63baeb"
++    },
++    "email": null,
++    "root": "/Users/alison/Documents/DPhil/multivariate/cycloneGAN",
++    "host": "Alisons-MacBook-Pro.local",
++    "username": "alison",
++    "executable": "/Users/alison/mambaforge/envs/tensorflow/bin/python",
++    "cpu_count": 8,
++    "cpu_count_logical": 8,
++    "disk": {
++        "total": 460.4317207336426,
++        "used": 424.6330032348633
++    },
++    "gpuapple": {
++        "type": "arm",
++        "vendor": "Apple"
++    },
++    "memory": {
++        "total": 16.0
++    }
++}
+diff --git a/scripts/wandb/run-20230727_113111-ljnpv0oh/files/wandb-summary.json b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/wandb-summary.json
+new file mode 100644
+index 0000000..6a2353d
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113111-ljnpv0oh/files/wandb-summary.json
+@@ -0,0 +1 @@
++{"_wandb": {"runtime": 2}}
+\ No newline at end of file
+diff --git a/scripts/wandb/run-20230727_113111-ljnpv0oh/run-ljnpv0oh.wandb b/scripts/wandb/run-20230727_113111-ljnpv0oh/run-ljnpv0oh.wandb
+new file mode 100644
+index 0000000..9a256dd
+Binary files /dev/null and b/scripts/wandb/run-20230727_113111-ljnpv0oh/run-ljnpv0oh.wandb differ
+diff --git a/scripts/wandb/run-20230727_113208-ggaugfqf/files/code/scripts/train_dcgan.py b/scripts/wandb/run-20230727_113208-ggaugfqf/files/code/scripts/train_dcgan.py
+new file mode 100644
+index 0000000..53460b7
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113208-ggaugfqf/files/code/scripts/train_dcgan.py
+@@ -0,0 +1,84 @@
++"""
++Note, requires config to create new model too.
++>>> new_gan = DCGAN.DCGAN(config)
++>>> new_gan.generator.load_weights(os.path.join(wd, 'saved_models', f'{finish_time}_generator_weights'))
++>>> new_gan.discriminator.load_weights(os.path.join(wd, 'saved_models', f'{finish_time}_discriminator_weights'))
++"""
++
++import os
++from datetime import datetime
++import tensorflow as tf
++tf.config.set_visible_devices([], 'GPU')
++import wandb
++from wandb.keras import WandbCallback
++
++import matplotlib.pyplot as plt
++from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
++
++from evtGAN import DCGAN, tf_utils, viz_utils
++
++global rundir
++
++plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
++
++# some static variables
++paddings = tf.constant([[0,0],[1,1],[1,1], [0,0]])
++var = 'wind'
++conditions = "all"
++im_size = (19, 23)
++cwd = os.getcwd()
++wd = os.path.join(cwd, "..")
++roots = [os.path.join(wd, "..", "wind_data", "u10_dailymax.csv"), os.path.join(wd, "..", "wind_data", "v10_dailymax.csv")]
++imdir = os.path.join(cwd, 'figures', 'temp')
++
++
++def log_image_to_wandb(fig, name:str, dir:str):
++    impath = os.path.join(dir, f"{name}.png")
++    fig.savefig(impath, **plot_kwargs)
++    wandb.log({name: wandb.Image(impath)})
++
++
++def main(config):
++    train, test, train_images, test_images = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, viz=False)
++    _, _, orig_images, _ = tf_utils.load_era5_datasets(roots, config.train_size, config.batch_size, im_size, paddings=paddings, conditions=conditions, scale=True, viz=False)
++
++    # train test callbacks
++    chi_score = DCGAN.ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
++    cross_entropy = DCGAN.CrossEntropy(next(iter(test)))
++
++    import pdb; pdb.set_trace()
++    # compile
++    with tf.device('/gpu:0'):
++        gan = DCGAN.compile_dcgan(config)
++        gan.fit(train, epochs=config.nepochs, callbacks=[WandbCallback(), chi_score, cross_entropy])
++
++    finish_time = datetime.now().strftime("%Y%m%d")
++    gan.generator.save_weights(os.path.join(wd, 'saved_models', f'{finish_time}_generator_weights'))
++    gan.discriminator.save_weights(os.path.join(wd, 'saved_models', f'{finish_time}_discriminator_weights'))
++
++    # generate 1000 images to visualise some results
++    synthetic_data = gan(1000)
++    synthetic_data = tf_utils.tf_unpad(synthetic_data, paddings).numpy()
++
++    fig = viz_utils.plot_generated_marginals(synthetic_data)
++    log_image_to_wandb(fig, 'generated_marginals', imdir)
++
++    fig = viz_utils.compare_ecs_plot(train_images, test_images, synthetic_data, orig_images, channel=0)
++    log_image_to_wandb(fig, 'correlations_u10', imdir)
++
++    fig = viz_utils.compare_ecs_plot(train_images, test_images, synthetic_data, orig_images, channel=1)
++    log_image_to_wandb(fig, 'correlations_v10', imdir)
++
++    fig = viz_utils.compare_channels_plot(train_images, test_images, synthetic_data)
++    log_image_to_wandb(fig, 'correlations multivariate', imdir)
++
++
++if __name__ == "__main__":
++    wandb.init(settings=wandb.Settings(code_dir="."))
++
++    rundir = os.path.join(wd, "saved-models", wandb.run.name)
++    os.makedirs(rundir)
++
++    tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf
++    tf.config.experimental.enable_op_determinism()  # removes stochasticity from individual operations
++    main(wandb.config)
+diff --git a/scripts/wandb/run-20230727_113208-ggaugfqf/files/conda-environment.yaml b/scripts/wandb/run-20230727_113208-ggaugfqf/files/conda-environment.yaml
+new file mode 100644
+index 0000000..e1ba2c2
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113208-ggaugfqf/files/conda-environment.yaml
+@@ -0,0 +1,264 @@
++name: tensorflow
++channels:
++  - apple
++  - conda-forge
++  - defaults
++dependencies:
++  - anyio=3.7.1=pyhd8ed1ab_0
++  - appnope=0.1.3=pyhd8ed1ab_0
++  - argon2-cffi=21.3.0=pyhd8ed1ab_0
++  - argon2-cffi-bindings=21.2.0=py310h8e9501a_3
++  - asttokens=2.2.1=pyhd8ed1ab_0
++  - attrs=23.1.0=pyh71513ae_1
++  - backcall=0.2.0=pyh9f0ad1d_0
++  - backports=1.0=pyhd8ed1ab_3
++  - backports.functools_lru_cache=1.6.5=pyhd8ed1ab_0
++  - beautifulsoup4=4.12.2=pyha770c72_0
++  - bleach=6.0.0=pyhd8ed1ab_0
++  - brotli=1.0.9=h1a8c8d9_9
++  - brotli-bin=1.0.9=h1a8c8d9_9
++  - brotli-python=1.0.9=py310h0f1eb42_9
++  - bzip2=1.0.8=h3422bc3_4
++  - c-ares=1.19.1=hb547adb_0
++  - ca-certificates=2023.5.7=hf0a4a13_0
++  - cached-property=1.5.2=hd8ed1ab_1
++  - cached_property=1.5.2=pyha770c72_1
++  - certifi=2023.5.7=pyhd8ed1ab_0
++  - cffi=1.15.1=py310h2399d43_3
++  - charset-normalizer=3.2.0=pyhd8ed1ab_0
++  - comm=0.1.3=pyhd8ed1ab_0
++  - contourpy=1.1.0=py310h38f39d4_0
++  - cycler=0.11.0=pyhd8ed1ab_0
++  - debugpy=1.6.7=py310h0f1eb42_0
++  - decorator=5.1.1=pyhd8ed1ab_0
++  - defusedxml=0.7.1=pyhd8ed1ab_0
++  - entrypoints=0.4=pyhd8ed1ab_0
++  - exceptiongroup=1.1.2=pyhd8ed1ab_0
++  - executing=1.2.0=pyhd8ed1ab_0
++  - flit-core=3.9.0=pyhd8ed1ab_0
++  - fonttools=4.40.0=py310h2aa6e3c_0
++  - freetype=2.12.1=hd633e50_1
++  - h5py=3.6.0=nompi_py310hb8bbf05_100
++  - hdf5=1.12.1=nompi_hd9dbc9e_104
++  - idna=3.4=pyhd8ed1ab_0
++  - importlib-metadata=6.8.0=pyha770c72_0
++  - importlib_metadata=6.8.0=hd8ed1ab_0
++  - importlib_resources=6.0.0=pyhd8ed1ab_1
++  - ipykernel=6.24.0=pyh5fb750a_0
++  - ipython=8.14.0=pyhd1c38e8_0
++  - ipython_genutils=0.2.0=py_1
++  - jedi=0.18.2=pyhd8ed1ab_0
++  - jinja2=3.1.2=pyhd8ed1ab_1
++  - jsonschema=4.18.0=pyhd8ed1ab_0
++  - jsonschema-specifications=2023.6.1=pyhd8ed1ab_0
++  - jupyter_client=8.3.0=pyhd8ed1ab_0
++  - jupyter_core=5.3.1=py310hbe9552e_0
++  - jupyter_events=0.6.3=pyhd8ed1ab_0
++  - jupyter_server=2.7.0=pyhd8ed1ab_0
++  - jupyter_server_terminals=0.4.4=pyhd8ed1ab_1
++  - jupyterlab_pygments=0.2.2=pyhd8ed1ab_0
++  - kiwisolver=1.4.4=py310h2887b22_1
++  - krb5=1.20.1=h69eda48_0
++  - lcms2=2.15=hd835a16_1
++  - lerc=4.0.0=h9a09cb3_0
++  - libblas=3.9.0=17_osxarm64_openblas
++  - libbrotlicommon=1.0.9=h1a8c8d9_9
++  - libbrotlidec=1.0.9=h1a8c8d9_9
++  - libbrotlienc=1.0.9=h1a8c8d9_9
++  - libcblas=3.9.0=17_osxarm64_openblas
++  - libcurl=8.1.2=h912dcd9_0
++  - libcxx=16.0.6=h4653b0c_0
++  - libdeflate=1.18=h1a8c8d9_0
++  - libedit=3.1.20191231=hc8eb9b7_2
++  - libev=4.33=h642e427_1
++  - libffi=3.4.2=h3422bc3_5
++  - libgfortran=5.0.0=12_2_0_hd922786_31
++  - libgfortran5=12.2.0=h0eea778_31
++  - libjpeg-turbo=2.1.5.1=h1a8c8d9_0
++  - liblapack=3.9.0=17_osxarm64_openblas
++  - libnghttp2=1.52.0=hae82a92_0
++  - libopenblas=0.3.23=openmp_hc731615_0
++  - libpng=1.6.39=h76d750c_0
++  - libprotobuf=3.19.6=hb5ab8b9_0
++  - libsodium=1.0.18=h27ca646_1
++  - libsqlite=3.42.0=hb31c410_0
++  - libssh2=1.11.0=h7a5bd25_0
++  - libtiff=4.5.1=h23a1a89_0
++  - libwebp-base=1.3.1=hb547adb_0
++  - libxcb=1.15=hf346824_0
++  - libzlib=1.2.13=h53f4e23_5
++  - llvm-openmp=16.0.6=h1c12783_0
++  - markupsafe=2.1.3=py310h2aa6e3c_0
++  - matplotlib=3.7.2=py310hb6292c7_0
++  - matplotlib-base=3.7.2=py310h49faba3_0
++  - matplotlib-inline=0.1.6=pyhd8ed1ab_0
++  - mistune=3.0.0=pyhd8ed1ab_0
++  - munkres=1.1.4=pyh9f0ad1d_0
++  - nbclassic=1.0.0=pyhb4ecaf3_1
++  - nbclient=0.8.0=pyhd8ed1ab_0
++  - nbconvert=7.6.0=pyhd8ed1ab_0
++  - nbconvert-core=7.6.0=pyhd8ed1ab_0
++  - nbconvert-pandoc=7.6.0=pyhd8ed1ab_0
++  - nbformat=5.9.1=pyhd8ed1ab_0
++  - ncurses=6.4=h7ea286d_0
++  - nest-asyncio=1.5.6=pyhd8ed1ab_0
++  - notebook=6.5.4=pyha770c72_0
++  - notebook-shim=0.2.3=pyhd8ed1ab_0
++  - numpy=1.23.2=py310h127c7cf_0
++  - openjpeg=2.5.0=hbc2ba62_2
++  - openssl=3.1.1=h53f4e23_1
++  - overrides=7.3.1=pyhd8ed1ab_0
++  - packaging=23.1=pyhd8ed1ab_0
++  - pandas=2.0.3=py310h1cdf563_1
++  - pandoc=3.1.3=hce30654_0
++  - pandocfilters=1.5.0=pyhd8ed1ab_0
++  - parso=0.8.3=pyhd8ed1ab_0
++  - pexpect=4.8.0=pyh1a96a4e_2
++  - pickleshare=0.7.5=py_1003
++  - pillow=10.0.0=py310h60ecbdf_0
++  - pip=23.1.2=pyhd8ed1ab_0
++  - pkgutil-resolve-name=1.3.10=pyhd8ed1ab_0
++  - platformdirs=3.8.1=pyhd8ed1ab_0
++  - pooch=1.7.0=pyha770c72_3
++  - prometheus_client=0.17.1=pyhd8ed1ab_0
++  - prompt-toolkit=3.0.39=pyha770c72_0
++  - prompt_toolkit=3.0.39=hd8ed1ab_0
++  - psutil=5.9.5=py310h8e9501a_0
++  - pthread-stubs=0.4=h27ca646_1001
++  - ptyprocess=0.7.0=pyhd3deb0d_0
++  - pure_eval=0.2.2=pyhd8ed1ab_0
++  - pycparser=2.21=pyhd8ed1ab_0
++  - pygments=2.15.1=pyhd8ed1ab_0
++  - pyobjc-core=9.2=py310hd07e440_0
++  - pyobjc-framework-cocoa=9.2=py310hd07e440_0
++  - pyparsing=3.0.9=pyhd8ed1ab_0
++  - pysocks=1.7.1=pyha2e5f31_6
++  - python=3.10.12=h01493a6_0_cpython
++  - python-dateutil=2.8.2=pyhd8ed1ab_0
++  - python-fastjsonschema=2.17.1=pyhd8ed1ab_0
++  - python-json-logger=2.0.7=pyhd8ed1ab_0
++  - python-tzdata=2023.3=pyhd8ed1ab_0
++  - python_abi=3.10=3_cp310
++  - pytz=2023.3=pyhd8ed1ab_0
++  - pyyaml=6.0=py310h8e9501a_5
++  - pyzmq=25.1.0=py310h30b7201_0
++  - readline=8.2=h92ec313_1
++  - referencing=0.29.1=pyhd8ed1ab_0
++  - requests=2.31.0=pyhd8ed1ab_0
++  - rfc3339-validator=0.1.4=pyhd8ed1ab_0
++  - rfc3986-validator=0.1.1=pyh9f0ad1d_0
++  - rpds-py=0.8.10=py310had9acf8_0
++  - scipy=1.11.1=py310h0975f3d_0
++  - send2trash=1.8.2=pyhd1c38e8_0
++  - setuptools=68.0.0=pyhd8ed1ab_0
++  - six=1.16.0=pyh6c4a22f_0
++  - sniffio=1.3.0=pyhd8ed1ab_0
++  - soupsieve=2.3.2.post1=pyhd8ed1ab_0
++  - stack_data=0.6.2=pyhd8ed1ab_0
++  - tensorflow-deps=2.10.0=0
++  - terminado=0.17.1=pyhd1c38e8_0
++  - tinycss2=1.2.1=pyhd8ed1ab_0
++  - tk=8.6.12=he1e0b03_0
++  - tornado=6.3.2=py310h2aa6e3c_0
++  - traitlets=5.9.0=pyhd8ed1ab_0
++  - typing-extensions=4.7.1=hd8ed1ab_0
++  - typing_extensions=4.7.1=pyha770c72_0
++  - typing_utils=0.1.0=pyhd8ed1ab_0
++  - tzdata=2023c=h71feb2d_0
++  - unicodedata2=15.0.0=py310h8e9501a_0
++  - wcwidth=0.2.6=pyhd8ed1ab_0
++  - webencodings=0.5.1=py_1
++  - websocket-client=1.6.1=pyhd8ed1ab_0
++  - wheel=0.40.0=pyhd8ed1ab_0
++  - xorg-libxau=1.0.11=hb547adb_0
++  - xorg-libxdmcp=1.1.3=h27ca646_0
++  - xz=5.2.6=h57fd34a_0
++  - yaml=0.2.5=h3422bc3_2
++  - zeromq=4.3.4=hbdafb3b_1
++  - zipp=3.16.0=pyhd8ed1ab_1
++  - zlib=1.2.13=h53f4e23_5
++  - zstd=1.5.2=h4f39d0f_7
++  - pip:
++      - absl-py==1.4.0
++      - appdirs==1.4.4
++      - array-record==0.4.0
++      - astunparse==1.6.3
++      - cachetools==5.3.1
++      - click==8.1.4
++      - click-plugins==1.1.1
++      - cligj==0.7.2
++      - cloudpickle==2.2.1
++      - cython==0.29.36
++      - dask==2023.3.2
++      - descartes==1.1.0
++      - dm-tree==0.1.8
++      - docker-pycreds==0.4.0
++      - etils==1.3.0
++      - fiona==1.9.4.post1
++      - flatbuffers==23.5.26
++      - fsspec==2023.6.0
++      - gast==0.4.0
++      - geopandas==0.13.2
++      - gitdb==4.0.10
++      - gitpython==3.1.32
++      - google-auth==2.21.0
++      - google-auth-oauthlib==1.0.0
++      - google-pasta==0.2.0
++      - googleapis-common-protos==1.59.1
++      - grpcio==1.56.0
++      - hdbscan==0.8.33
++      - jax==0.4.13
++      - joblib==1.3.1
++      - keras==2.12.0
++      - keras-core==0.1.2
++      - keras-cv==0.6.1
++      - libclang==16.0.0
++      - locket==1.0.0
++      - markdown==3.4.3
++      - markdown-it-py==3.0.0
++      - mdurl==0.1.2
++      - ml-dtypes==0.2.0
++      - namex==0.0.7
++      - oauthlib==3.2.2
++      - opt-einsum==3.3.0
++      - partd==1.4.0
++      - pathtools==0.1.2
++      - patsy==0.5.3
++      - prettytable==3.8.0
++      - promise==2.3
++      - protobuf==4.23.4
++      - pyarrow==12.0.1
++      - pyasn1==0.5.0
++      - pyasn1-modules==0.3.0
++      - pyinterpolate==0.4.2
++      - pyogrio==0.6.0
++      - pyproj==3.6.0
++      - regex==2023.6.3
++      - requests-oauthlib==1.3.1
++      - rich==13.4.2
++      - rsa==4.9
++      - rtree==1.0.1
++      - scikit-learn==1.3.0
++      - sentry-sdk==1.28.0
++      - setproctitle==1.3.2
++      - shapely==2.0.1
++      - smmap==5.0.0
++      - statsmodels==0.14.0
++      - tensorboard==2.12.3
++      - tensorboard-data-server==0.7.1
++      - tensorflow-datasets==4.9.2
++      - tensorflow-estimator==2.12.0
++      - tensorflow-macos==2.12.0
++      - tensorflow-metadata==1.13.1
++      - tensorflow-metal==0.8.0
++      - tensorflow-probability==0.20.1
++      - termcolor==2.3.0
++      - threadpoolctl==3.2.0
++      - toml==0.10.2
++      - toolz==0.12.0
++      - tqdm==4.65.0
++      - urllib3==1.26.16
++      - wandb==0.15.5
++      - werkzeug==2.3.6
++      - wrapt==1.14.1
++prefix: /Users/alison/mambaforge/envs/tensorflow
+diff --git a/scripts/wandb/run-20230727_113208-ggaugfqf/files/config.yaml b/scripts/wandb/run-20230727_113208-ggaugfqf/files/config.yaml
+new file mode 100644
+index 0000000..2eb7af3
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113208-ggaugfqf/files/config.yaml
+@@ -0,0 +1,28 @@
++wandb_version: 1
++
++_wandb:
++  desc: null
++  value:
++    code_path: code/scripts/train_dcgan.py
++    python_version: 3.10.12
++    cli_version: 0.15.5
++    framework: keras
++    is_jupyter_run: false
++    is_kaggle_kernel: false
++    start_time: 1690453928.589711
++    t:
++      1:
++      - 2
++      - 3
++      - 55
++      2:
++      - 2
++      - 3
++      - 55
++      3:
++      - 23
++      4: 3.10.12
++      5: 0.15.5
++      8:
++      - 4
++      - 5
+diff --git a/scripts/wandb/run-20230727_113208-ggaugfqf/files/diff.patch b/scripts/wandb/run-20230727_113208-ggaugfqf/files/diff.patch
+new file mode 100644
+index 0000000..8dde6ac
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113208-ggaugfqf/files/diff.patch
+@@ -0,0 +1,51 @@
++diff --git a/.DS_Store b/.DS_Store
++index 53558da..edc13b7 100644
++Binary files a/.DS_Store and b/.DS_Store differ
++diff --git a/scripts/train_dcgan.py b/scripts/train_dcgan.py
++index 5bfe563..53460b7 100644
++--- a/scripts/train_dcgan.py
+++++ b/scripts/train_dcgan.py
++@@ -15,12 +15,11 @@ from wandb.keras import WandbCallback
++ import matplotlib.pyplot as plt
++ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
++ 
++-import DCGAN
++-import tf_utils
++-import viz_utils
+++from evtGAN import DCGAN, tf_utils, viz_utils
++ 
++-plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
+++global rundir
++ 
+++plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
++ 
++ # some static variables
++ paddings = tf.constant([[0,0],[1,1],[1,1], [0,0]])
++@@ -29,7 +28,7 @@ conditions = "all"
++ im_size = (19, 23)
++ cwd = os.getcwd()
++ wd = os.path.join(cwd, "..")
++-roots = [os.path.join(wd, "wind_data", "u10_dailymax.csv"), os.path.join(wd, "wind_data", "v10_dailymax.csv")]
+++roots = [os.path.join(wd, "..", "wind_data", "u10_dailymax.csv"), os.path.join(wd, "..", "wind_data", "v10_dailymax.csv")]
++ imdir = os.path.join(cwd, 'figures', 'temp')
++ 
++ 
++@@ -47,6 +46,7 @@ def main(config):
++     chi_score = DCGAN.ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
++     cross_entropy = DCGAN.CrossEntropy(next(iter(test)))
++ 
+++    import pdb; pdb.set_trace()
++     # compile
++     with tf.device('/gpu:0'):
++         gan = DCGAN.compile_dcgan(config)
++@@ -75,6 +75,10 @@ def main(config):
++ 
++ if __name__ == "__main__":
++     wandb.init(settings=wandb.Settings(code_dir="."))
+++
+++    rundir = os.path.join(wd, "saved-models", wandb.run.name)
+++    os.makedirs(rundir)
+++
++     tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf
++     tf.config.experimental.enable_op_determinism()  # removes stochasticity from individual operations
++     main(wandb.config)
+diff --git a/scripts/wandb/run-20230727_113208-ggaugfqf/files/requirements.txt b/scripts/wandb/run-20230727_113208-ggaugfqf/files/requirements.txt
+new file mode 100644
+index 0000000..fcaefac
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113208-ggaugfqf/files/requirements.txt
+@@ -0,0 +1,194 @@
++absl-py==1.4.0
++anyio==3.7.1
++appdirs==1.4.4
++appnope==0.1.3
++argon2-cffi-bindings==21.2.0
++argon2-cffi==21.3.0
++array-record==0.4.0
++asttokens==2.2.1
++astunparse==1.6.3
++attrs==23.1.0
++backcall==0.2.0
++backports.functools-lru-cache==1.6.5
++beautifulsoup4==4.12.2
++bleach==6.0.0
++brotli==1.0.9
++cached-property==1.5.2
++cachetools==5.3.1
++certifi==2023.5.7
++cffi==1.15.1
++charset-normalizer==3.2.0
++click-plugins==1.1.1
++click==8.1.4
++cligj==0.7.2
++cloudpickle==2.2.1
++comm==0.1.3
++contourpy==1.1.0
++cycler==0.11.0
++cython==0.29.36
++dask==2023.3.2
++debugpy==1.6.7
++decorator==5.1.1
++defusedxml==0.7.1
++descartes==1.1.0
++dm-tree==0.1.8
++docker-pycreds==0.4.0
++entrypoints==0.4
++etils==1.3.0
++evtgan==0.1
++exceptiongroup==1.1.2
++executing==1.2.0
++fastjsonschema==2.17.1
++fiona==1.9.4.post1
++flatbuffers==23.5.26
++flit-core==3.9.0
++fonttools==4.40.0
++fsspec==2023.6.0
++gast==0.4.0
++geopandas==0.13.2
++gitdb==4.0.10
++gitpython==3.1.32
++google-auth-oauthlib==1.0.0
++google-auth==2.21.0
++google-pasta==0.2.0
++googleapis-common-protos==1.59.1
++grpcio==1.56.0
++h5py==3.6.0
++hdbscan==0.8.33
++idna==3.4
++importlib-metadata==6.8.0
++importlib-resources==6.0.0
++ipykernel==6.24.0
++ipython-genutils==0.2.0
++ipython==8.14.0
++jax==0.4.13
++jedi==0.18.2
++jinja2==3.1.2
++joblib==1.3.1
++jsonschema-specifications==2023.6.1
++jsonschema==4.18.0
++jupyter-client==8.3.0
++jupyter-core==5.3.1
++jupyter-events==0.6.3
++jupyter-server-terminals==0.4.4
++jupyter-server==2.7.0
++jupyterlab-pygments==0.2.2
++keras-core==0.1.2
++keras-cv==0.6.1
++keras==2.12.0
++kiwisolver==1.4.4
++libclang==16.0.0
++locket==1.0.0
++markdown-it-py==3.0.0
++markdown==3.4.3
++markupsafe==2.1.3
++matplotlib-inline==0.1.6
++matplotlib==3.7.2
++mdurl==0.1.2
++mistune==3.0.0
++ml-dtypes==0.2.0
++munkres==1.1.4
++namex==0.0.7
++nbclassic==1.0.0
++nbclient==0.8.0
++nbconvert==7.6.0
++nbformat==5.9.1
++nest-asyncio==1.5.6
++notebook-shim==0.2.3
++notebook==6.5.4
++numpy==1.23.2
++oauthlib==3.2.2
++opt-einsum==3.3.0
++overrides==7.3.1
++packaging==23.1
++pandas==2.0.3
++pandocfilters==1.5.0
++parso==0.8.3
++partd==1.4.0
++pathtools==0.1.2
++patsy==0.5.3
++pexpect==4.8.0
++pickleshare==0.7.5
++pillow==10.0.0
++pip==23.1.2
++pkgutil-resolve-name==1.3.10
++platformdirs==3.8.1
++pooch==1.7.0
++prettytable==3.8.0
++prometheus-client==0.17.1
++promise==2.3
++prompt-toolkit==3.0.39
++protobuf==4.23.4
++psutil==5.9.5
++ptyprocess==0.7.0
++pure-eval==0.2.2
++pyarrow==12.0.1
++pyasn1-modules==0.3.0
++pyasn1==0.5.0
++pycparser==2.21
++pygments==2.15.1
++pyinterpolate==0.4.2
++pyobjc-core==9.2
++pyobjc-framework-cocoa==9.2
++pyogrio==0.6.0
++pyparsing==3.0.9
++pyproj==3.6.0
++pysocks==1.7.1
++python-dateutil==2.8.2
++python-json-logger==2.0.7
++pytz==2023.3
++pyyaml==6.0
++pyzmq==25.1.0
++referencing==0.29.1
++regex==2023.6.3
++requests-oauthlib==1.3.1
++requests==2.31.0
++rfc3339-validator==0.1.4
++rfc3986-validator==0.1.1
++rich==13.4.2
++rpds-py==0.8.10
++rsa==4.9
++rtree==1.0.1
++scikit-learn==1.3.0
++scipy==1.11.1
++send2trash==1.8.2
++sentry-sdk==1.28.0
++setproctitle==1.3.2
++setuptools==68.0.0
++shapely==2.0.1
++six==1.16.0
++smmap==5.0.0
++sniffio==1.3.0
++soupsieve==2.3.2.post1
++stack-data==0.6.2
++statsmodels==0.14.0
++tensorboard-data-server==0.7.1
++tensorboard==2.12.3
++tensorflow-datasets==4.9.2
++tensorflow-estimator==2.12.0
++tensorflow-macos==2.12.0
++tensorflow-metadata==1.13.1
++tensorflow-metal==0.8.0
++tensorflow-probability==0.20.1
++termcolor==2.3.0
++terminado==0.17.1
++threadpoolctl==3.2.0
++tinycss2==1.2.1
++toml==0.10.2
++toolz==0.12.0
++tornado==6.3.2
++tqdm==4.65.0
++traitlets==5.9.0
++typing-extensions==4.7.1
++typing-utils==0.1.0
++tzdata==2023.3
++unicodedata2==15.0.0
++urllib3==1.26.16
++wandb==0.15.5
++wcwidth==0.2.6
++webencodings==0.5.1
++websocket-client==1.6.1
++werkzeug==2.3.6
++wheel==0.40.0
++wrapt==1.14.1
++zipp==3.16.0
+\ No newline at end of file
+diff --git a/scripts/wandb/run-20230727_113208-ggaugfqf/files/wandb-metadata.json b/scripts/wandb/run-20230727_113208-ggaugfqf/files/wandb-metadata.json
+new file mode 100644
+index 0000000..9729012
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113208-ggaugfqf/files/wandb-metadata.json
+@@ -0,0 +1,34 @@
++{
++    "os": "macOS-12.5.1-arm64-arm-64bit",
++    "python": "3.10.12",
++    "heartbeatAt": "2023-07-27T10:32:09.393761",
++    "startedAt": "2023-07-27T10:32:08.581931",
++    "docker": null,
++    "cuda": null,
++    "args": [],
++    "state": "running",
++    "program": "/Users/alison/Documents/DPhil/multivariate/cycloneGAN/scripts/train_dcgan.py",
++    "codePath": "scripts/train_dcgan.py",
++    "git": {
++        "remote": "git@github.com:alisonpeard/cycloneGAN.git",
++        "commit": "cda095f32b7ed64df3974fd77bc182995e63baeb"
++    },
++    "email": null,
++    "root": "/Users/alison/Documents/DPhil/multivariate/cycloneGAN",
++    "host": "Alisons-MacBook-Pro.local",
++    "username": "alison",
++    "executable": "/Users/alison/mambaforge/envs/tensorflow/bin/python",
++    "cpu_count": 8,
++    "cpu_count_logical": 8,
++    "disk": {
++        "total": 460.4317207336426,
++        "used": 424.6295700073242
++    },
++    "gpuapple": {
++        "type": "arm",
++        "vendor": "Apple"
++    },
++    "memory": {
++        "total": 16.0
++    }
++}
+diff --git a/scripts/wandb/run-20230727_113208-ggaugfqf/files/wandb-summary.json b/scripts/wandb/run-20230727_113208-ggaugfqf/files/wandb-summary.json
+new file mode 100644
+index 0000000..6a2353d
+--- /dev/null
++++ b/scripts/wandb/run-20230727_113208-ggaugfqf/files/wandb-summary.json
+@@ -0,0 +1 @@
++{"_wandb": {"runtime": 2}}
+\ No newline at end of file
+diff --git a/scripts/wandb/run-20230727_113208-ggaugfqf/run-ggaugfqf.wandb b/scripts/wandb/run-20230727_113208-ggaugfqf/run-ggaugfqf.wandb
+new file mode 100644
+index 0000000..b32ec5d
+Binary files /dev/null and b/scripts/wandb/run-20230727_113208-ggaugfqf/run-ggaugfqf.wandb differ
+diff --git a/wandb/.DS_Store b/wandb/.DS_Store
+new file mode 100644
+index 0000000..ba16e49
+Binary files /dev/null and b/wandb/.DS_Store differ
+diff --git a/wandb/latest-run b/wandb/latest-run
+new file mode 120000
+index 0000000..5967d6c
+--- /dev/null
++++ b/wandb/latest-run
+@@ -0,0 +1 @@
++run-20230727_112543-v6x93uoc
+\ No newline at end of file
+diff --git a/wandb/run-20230727_112543-v6x93uoc/files/conda-environment.yaml b/wandb/run-20230727_112543-v6x93uoc/files/conda-environment.yaml
+new file mode 100644
+index 0000000..e1ba2c2
+--- /dev/null
++++ b/wandb/run-20230727_112543-v6x93uoc/files/conda-environment.yaml
+@@ -0,0 +1,264 @@
++name: tensorflow
++channels:
++  - apple
++  - conda-forge
++  - defaults
++dependencies:
++  - anyio=3.7.1=pyhd8ed1ab_0
++  - appnope=0.1.3=pyhd8ed1ab_0
++  - argon2-cffi=21.3.0=pyhd8ed1ab_0
++  - argon2-cffi-bindings=21.2.0=py310h8e9501a_3
++  - asttokens=2.2.1=pyhd8ed1ab_0
++  - attrs=23.1.0=pyh71513ae_1
++  - backcall=0.2.0=pyh9f0ad1d_0
++  - backports=1.0=pyhd8ed1ab_3
++  - backports.functools_lru_cache=1.6.5=pyhd8ed1ab_0
++  - beautifulsoup4=4.12.2=pyha770c72_0
++  - bleach=6.0.0=pyhd8ed1ab_0
++  - brotli=1.0.9=h1a8c8d9_9
++  - brotli-bin=1.0.9=h1a8c8d9_9
++  - brotli-python=1.0.9=py310h0f1eb42_9
++  - bzip2=1.0.8=h3422bc3_4
++  - c-ares=1.19.1=hb547adb_0
++  - ca-certificates=2023.5.7=hf0a4a13_0
++  - cached-property=1.5.2=hd8ed1ab_1
++  - cached_property=1.5.2=pyha770c72_1
++  - certifi=2023.5.7=pyhd8ed1ab_0
++  - cffi=1.15.1=py310h2399d43_3
++  - charset-normalizer=3.2.0=pyhd8ed1ab_0
++  - comm=0.1.3=pyhd8ed1ab_0
++  - contourpy=1.1.0=py310h38f39d4_0
++  - cycler=0.11.0=pyhd8ed1ab_0
++  - debugpy=1.6.7=py310h0f1eb42_0
++  - decorator=5.1.1=pyhd8ed1ab_0
++  - defusedxml=0.7.1=pyhd8ed1ab_0
++  - entrypoints=0.4=pyhd8ed1ab_0
++  - exceptiongroup=1.1.2=pyhd8ed1ab_0
++  - executing=1.2.0=pyhd8ed1ab_0
++  - flit-core=3.9.0=pyhd8ed1ab_0
++  - fonttools=4.40.0=py310h2aa6e3c_0
++  - freetype=2.12.1=hd633e50_1
++  - h5py=3.6.0=nompi_py310hb8bbf05_100
++  - hdf5=1.12.1=nompi_hd9dbc9e_104
++  - idna=3.4=pyhd8ed1ab_0
++  - importlib-metadata=6.8.0=pyha770c72_0
++  - importlib_metadata=6.8.0=hd8ed1ab_0
++  - importlib_resources=6.0.0=pyhd8ed1ab_1
++  - ipykernel=6.24.0=pyh5fb750a_0
++  - ipython=8.14.0=pyhd1c38e8_0
++  - ipython_genutils=0.2.0=py_1
++  - jedi=0.18.2=pyhd8ed1ab_0
++  - jinja2=3.1.2=pyhd8ed1ab_1
++  - jsonschema=4.18.0=pyhd8ed1ab_0
++  - jsonschema-specifications=2023.6.1=pyhd8ed1ab_0
++  - jupyter_client=8.3.0=pyhd8ed1ab_0
++  - jupyter_core=5.3.1=py310hbe9552e_0
++  - jupyter_events=0.6.3=pyhd8ed1ab_0
++  - jupyter_server=2.7.0=pyhd8ed1ab_0
++  - jupyter_server_terminals=0.4.4=pyhd8ed1ab_1
++  - jupyterlab_pygments=0.2.2=pyhd8ed1ab_0
++  - kiwisolver=1.4.4=py310h2887b22_1
++  - krb5=1.20.1=h69eda48_0
++  - lcms2=2.15=hd835a16_1
++  - lerc=4.0.0=h9a09cb3_0
++  - libblas=3.9.0=17_osxarm64_openblas
++  - libbrotlicommon=1.0.9=h1a8c8d9_9
++  - libbrotlidec=1.0.9=h1a8c8d9_9
++  - libbrotlienc=1.0.9=h1a8c8d9_9
++  - libcblas=3.9.0=17_osxarm64_openblas
++  - libcurl=8.1.2=h912dcd9_0
++  - libcxx=16.0.6=h4653b0c_0
++  - libdeflate=1.18=h1a8c8d9_0
++  - libedit=3.1.20191231=hc8eb9b7_2
++  - libev=4.33=h642e427_1
++  - libffi=3.4.2=h3422bc3_5
++  - libgfortran=5.0.0=12_2_0_hd922786_31
++  - libgfortran5=12.2.0=h0eea778_31
++  - libjpeg-turbo=2.1.5.1=h1a8c8d9_0
++  - liblapack=3.9.0=17_osxarm64_openblas
++  - libnghttp2=1.52.0=hae82a92_0
++  - libopenblas=0.3.23=openmp_hc731615_0
++  - libpng=1.6.39=h76d750c_0
++  - libprotobuf=3.19.6=hb5ab8b9_0
++  - libsodium=1.0.18=h27ca646_1
++  - libsqlite=3.42.0=hb31c410_0
++  - libssh2=1.11.0=h7a5bd25_0
++  - libtiff=4.5.1=h23a1a89_0
++  - libwebp-base=1.3.1=hb547adb_0
++  - libxcb=1.15=hf346824_0
++  - libzlib=1.2.13=h53f4e23_5
++  - llvm-openmp=16.0.6=h1c12783_0
++  - markupsafe=2.1.3=py310h2aa6e3c_0
++  - matplotlib=3.7.2=py310hb6292c7_0
++  - matplotlib-base=3.7.2=py310h49faba3_0
++  - matplotlib-inline=0.1.6=pyhd8ed1ab_0
++  - mistune=3.0.0=pyhd8ed1ab_0
++  - munkres=1.1.4=pyh9f0ad1d_0
++  - nbclassic=1.0.0=pyhb4ecaf3_1
++  - nbclient=0.8.0=pyhd8ed1ab_0
++  - nbconvert=7.6.0=pyhd8ed1ab_0
++  - nbconvert-core=7.6.0=pyhd8ed1ab_0
++  - nbconvert-pandoc=7.6.0=pyhd8ed1ab_0
++  - nbformat=5.9.1=pyhd8ed1ab_0
++  - ncurses=6.4=h7ea286d_0
++  - nest-asyncio=1.5.6=pyhd8ed1ab_0
++  - notebook=6.5.4=pyha770c72_0
++  - notebook-shim=0.2.3=pyhd8ed1ab_0
++  - numpy=1.23.2=py310h127c7cf_0
++  - openjpeg=2.5.0=hbc2ba62_2
++  - openssl=3.1.1=h53f4e23_1
++  - overrides=7.3.1=pyhd8ed1ab_0
++  - packaging=23.1=pyhd8ed1ab_0
++  - pandas=2.0.3=py310h1cdf563_1
++  - pandoc=3.1.3=hce30654_0
++  - pandocfilters=1.5.0=pyhd8ed1ab_0
++  - parso=0.8.3=pyhd8ed1ab_0
++  - pexpect=4.8.0=pyh1a96a4e_2
++  - pickleshare=0.7.5=py_1003
++  - pillow=10.0.0=py310h60ecbdf_0
++  - pip=23.1.2=pyhd8ed1ab_0
++  - pkgutil-resolve-name=1.3.10=pyhd8ed1ab_0
++  - platformdirs=3.8.1=pyhd8ed1ab_0
++  - pooch=1.7.0=pyha770c72_3
++  - prometheus_client=0.17.1=pyhd8ed1ab_0
++  - prompt-toolkit=3.0.39=pyha770c72_0
++  - prompt_toolkit=3.0.39=hd8ed1ab_0
++  - psutil=5.9.5=py310h8e9501a_0
++  - pthread-stubs=0.4=h27ca646_1001
++  - ptyprocess=0.7.0=pyhd3deb0d_0
++  - pure_eval=0.2.2=pyhd8ed1ab_0
++  - pycparser=2.21=pyhd8ed1ab_0
++  - pygments=2.15.1=pyhd8ed1ab_0
++  - pyobjc-core=9.2=py310hd07e440_0
++  - pyobjc-framework-cocoa=9.2=py310hd07e440_0
++  - pyparsing=3.0.9=pyhd8ed1ab_0
++  - pysocks=1.7.1=pyha2e5f31_6
++  - python=3.10.12=h01493a6_0_cpython
++  - python-dateutil=2.8.2=pyhd8ed1ab_0
++  - python-fastjsonschema=2.17.1=pyhd8ed1ab_0
++  - python-json-logger=2.0.7=pyhd8ed1ab_0
++  - python-tzdata=2023.3=pyhd8ed1ab_0
++  - python_abi=3.10=3_cp310
++  - pytz=2023.3=pyhd8ed1ab_0
++  - pyyaml=6.0=py310h8e9501a_5
++  - pyzmq=25.1.0=py310h30b7201_0
++  - readline=8.2=h92ec313_1
++  - referencing=0.29.1=pyhd8ed1ab_0
++  - requests=2.31.0=pyhd8ed1ab_0
++  - rfc3339-validator=0.1.4=pyhd8ed1ab_0
++  - rfc3986-validator=0.1.1=pyh9f0ad1d_0
++  - rpds-py=0.8.10=py310had9acf8_0
++  - scipy=1.11.1=py310h0975f3d_0
++  - send2trash=1.8.2=pyhd1c38e8_0
++  - setuptools=68.0.0=pyhd8ed1ab_0
++  - six=1.16.0=pyh6c4a22f_0
++  - sniffio=1.3.0=pyhd8ed1ab_0
++  - soupsieve=2.3.2.post1=pyhd8ed1ab_0
++  - stack_data=0.6.2=pyhd8ed1ab_0
++  - tensorflow-deps=2.10.0=0
++  - terminado=0.17.1=pyhd1c38e8_0
++  - tinycss2=1.2.1=pyhd8ed1ab_0
++  - tk=8.6.12=he1e0b03_0
++  - tornado=6.3.2=py310h2aa6e3c_0
++  - traitlets=5.9.0=pyhd8ed1ab_0
++  - typing-extensions=4.7.1=hd8ed1ab_0
++  - typing_extensions=4.7.1=pyha770c72_0
++  - typing_utils=0.1.0=pyhd8ed1ab_0
++  - tzdata=2023c=h71feb2d_0
++  - unicodedata2=15.0.0=py310h8e9501a_0
++  - wcwidth=0.2.6=pyhd8ed1ab_0
++  - webencodings=0.5.1=py_1
++  - websocket-client=1.6.1=pyhd8ed1ab_0
++  - wheel=0.40.0=pyhd8ed1ab_0
++  - xorg-libxau=1.0.11=hb547adb_0
++  - xorg-libxdmcp=1.1.3=h27ca646_0
++  - xz=5.2.6=h57fd34a_0
++  - yaml=0.2.5=h3422bc3_2
++  - zeromq=4.3.4=hbdafb3b_1
++  - zipp=3.16.0=pyhd8ed1ab_1
++  - zlib=1.2.13=h53f4e23_5
++  - zstd=1.5.2=h4f39d0f_7
++  - pip:
++      - absl-py==1.4.0
++      - appdirs==1.4.4
++      - array-record==0.4.0
++      - astunparse==1.6.3
++      - cachetools==5.3.1
++      - click==8.1.4
++      - click-plugins==1.1.1
++      - cligj==0.7.2
++      - cloudpickle==2.2.1
++      - cython==0.29.36
++      - dask==2023.3.2
++      - descartes==1.1.0
++      - dm-tree==0.1.8
++      - docker-pycreds==0.4.0
++      - etils==1.3.0
++      - fiona==1.9.4.post1
++      - flatbuffers==23.5.26
++      - fsspec==2023.6.0
++      - gast==0.4.0
++      - geopandas==0.13.2
++      - gitdb==4.0.10
++      - gitpython==3.1.32
++      - google-auth==2.21.0
++      - google-auth-oauthlib==1.0.0
++      - google-pasta==0.2.0
++      - googleapis-common-protos==1.59.1
++      - grpcio==1.56.0
++      - hdbscan==0.8.33
++      - jax==0.4.13
++      - joblib==1.3.1
++      - keras==2.12.0
++      - keras-core==0.1.2
++      - keras-cv==0.6.1
++      - libclang==16.0.0
++      - locket==1.0.0
++      - markdown==3.4.3
++      - markdown-it-py==3.0.0
++      - mdurl==0.1.2
++      - ml-dtypes==0.2.0
++      - namex==0.0.7
++      - oauthlib==3.2.2
++      - opt-einsum==3.3.0
++      - partd==1.4.0
++      - pathtools==0.1.2
++      - patsy==0.5.3
++      - prettytable==3.8.0
++      - promise==2.3
++      - protobuf==4.23.4
++      - pyarrow==12.0.1
++      - pyasn1==0.5.0
++      - pyasn1-modules==0.3.0
++      - pyinterpolate==0.4.2
++      - pyogrio==0.6.0
++      - pyproj==3.6.0
++      - regex==2023.6.3
++      - requests-oauthlib==1.3.1
++      - rich==13.4.2
++      - rsa==4.9
++      - rtree==1.0.1
++      - scikit-learn==1.3.0
++      - sentry-sdk==1.28.0
++      - setproctitle==1.3.2
++      - shapely==2.0.1
++      - smmap==5.0.0
++      - statsmodels==0.14.0
++      - tensorboard==2.12.3
++      - tensorboard-data-server==0.7.1
++      - tensorflow-datasets==4.9.2
++      - tensorflow-estimator==2.12.0
++      - tensorflow-macos==2.12.0
++      - tensorflow-metadata==1.13.1
++      - tensorflow-metal==0.8.0
++      - tensorflow-probability==0.20.1
++      - termcolor==2.3.0
++      - threadpoolctl==3.2.0
++      - toml==0.10.2
++      - toolz==0.12.0
++      - tqdm==4.65.0
++      - urllib3==1.26.16
++      - wandb==0.15.5
++      - werkzeug==2.3.6
++      - wrapt==1.14.1
++prefix: /Users/alison/mambaforge/envs/tensorflow
+diff --git a/wandb/run-20230727_112543-v6x93uoc/files/config.yaml b/wandb/run-20230727_112543-v6x93uoc/files/config.yaml
+new file mode 100644
+index 0000000..64cc59f
+--- /dev/null
++++ b/wandb/run-20230727_112543-v6x93uoc/files/config.yaml
+@@ -0,0 +1,21 @@
++wandb_version: 1
++
++_wandb:
++  desc: null
++  value:
++    python_version: 3.10.12
++    cli_version: 0.15.5
++    is_jupyter_run: false
++    is_kaggle_kernel: false
++    start_time: 1690453543.70968
++    t:
++      1:
++      - 55
++      2:
++      - 55
++      3:
++      - 23
++      4: 3.10.12
++      5: 0.15.5
++      8:
++      - 5
+diff --git a/wandb/run-20230727_112543-v6x93uoc/files/diff.patch b/wandb/run-20230727_112543-v6x93uoc/files/diff.patch
+new file mode 100644
+index 0000000..53769b6
+--- /dev/null
++++ b/wandb/run-20230727_112543-v6x93uoc/files/diff.patch
+@@ -0,0 +1,3 @@
++diff --git a/.DS_Store b/.DS_Store
++index 53558da..11dbf5a 100644
++Binary files a/.DS_Store and b/.DS_Store differ
+diff --git a/wandb/run-20230727_112543-v6x93uoc/files/requirements.txt b/wandb/run-20230727_112543-v6x93uoc/files/requirements.txt
+new file mode 100644
+index 0000000..fcaefac
+--- /dev/null
++++ b/wandb/run-20230727_112543-v6x93uoc/files/requirements.txt
+@@ -0,0 +1,194 @@
++absl-py==1.4.0
++anyio==3.7.1
++appdirs==1.4.4
++appnope==0.1.3
++argon2-cffi-bindings==21.2.0
++argon2-cffi==21.3.0
++array-record==0.4.0
++asttokens==2.2.1
++astunparse==1.6.3
++attrs==23.1.0
++backcall==0.2.0
++backports.functools-lru-cache==1.6.5
++beautifulsoup4==4.12.2
++bleach==6.0.0
++brotli==1.0.9
++cached-property==1.5.2
++cachetools==5.3.1
++certifi==2023.5.7
++cffi==1.15.1
++charset-normalizer==3.2.0
++click-plugins==1.1.1
++click==8.1.4
++cligj==0.7.2
++cloudpickle==2.2.1
++comm==0.1.3
++contourpy==1.1.0
++cycler==0.11.0
++cython==0.29.36
++dask==2023.3.2
++debugpy==1.6.7
++decorator==5.1.1
++defusedxml==0.7.1
++descartes==1.1.0
++dm-tree==0.1.8
++docker-pycreds==0.4.0
++entrypoints==0.4
++etils==1.3.0
++evtgan==0.1
++exceptiongroup==1.1.2
++executing==1.2.0
++fastjsonschema==2.17.1
++fiona==1.9.4.post1
++flatbuffers==23.5.26
++flit-core==3.9.0
++fonttools==4.40.0
++fsspec==2023.6.0
++gast==0.4.0
++geopandas==0.13.2
++gitdb==4.0.10
++gitpython==3.1.32
++google-auth-oauthlib==1.0.0
++google-auth==2.21.0
++google-pasta==0.2.0
++googleapis-common-protos==1.59.1
++grpcio==1.56.0
++h5py==3.6.0
++hdbscan==0.8.33
++idna==3.4
++importlib-metadata==6.8.0
++importlib-resources==6.0.0
++ipykernel==6.24.0
++ipython-genutils==0.2.0
++ipython==8.14.0
++jax==0.4.13
++jedi==0.18.2
++jinja2==3.1.2
++joblib==1.3.1
++jsonschema-specifications==2023.6.1
++jsonschema==4.18.0
++jupyter-client==8.3.0
++jupyter-core==5.3.1
++jupyter-events==0.6.3
++jupyter-server-terminals==0.4.4
++jupyter-server==2.7.0
++jupyterlab-pygments==0.2.2
++keras-core==0.1.2
++keras-cv==0.6.1
++keras==2.12.0
++kiwisolver==1.4.4
++libclang==16.0.0
++locket==1.0.0
++markdown-it-py==3.0.0
++markdown==3.4.3
++markupsafe==2.1.3
++matplotlib-inline==0.1.6
++matplotlib==3.7.2
++mdurl==0.1.2
++mistune==3.0.0
++ml-dtypes==0.2.0
++munkres==1.1.4
++namex==0.0.7
++nbclassic==1.0.0
++nbclient==0.8.0
++nbconvert==7.6.0
++nbformat==5.9.1
++nest-asyncio==1.5.6
++notebook-shim==0.2.3
++notebook==6.5.4
++numpy==1.23.2
++oauthlib==3.2.2
++opt-einsum==3.3.0
++overrides==7.3.1
++packaging==23.1
++pandas==2.0.3
++pandocfilters==1.5.0
++parso==0.8.3
++partd==1.4.0
++pathtools==0.1.2
++patsy==0.5.3
++pexpect==4.8.0
++pickleshare==0.7.5
++pillow==10.0.0
++pip==23.1.2
++pkgutil-resolve-name==1.3.10
++platformdirs==3.8.1
++pooch==1.7.0
++prettytable==3.8.0
++prometheus-client==0.17.1
++promise==2.3
++prompt-toolkit==3.0.39
++protobuf==4.23.4
++psutil==5.9.5
++ptyprocess==0.7.0
++pure-eval==0.2.2
++pyarrow==12.0.1
++pyasn1-modules==0.3.0
++pyasn1==0.5.0
++pycparser==2.21
++pygments==2.15.1
++pyinterpolate==0.4.2
++pyobjc-core==9.2
++pyobjc-framework-cocoa==9.2
++pyogrio==0.6.0
++pyparsing==3.0.9
++pyproj==3.6.0
++pysocks==1.7.1
++python-dateutil==2.8.2
++python-json-logger==2.0.7
++pytz==2023.3
++pyyaml==6.0
++pyzmq==25.1.0
++referencing==0.29.1
++regex==2023.6.3
++requests-oauthlib==1.3.1
++requests==2.31.0
++rfc3339-validator==0.1.4
++rfc3986-validator==0.1.1
++rich==13.4.2
++rpds-py==0.8.10
++rsa==4.9
++rtree==1.0.1
++scikit-learn==1.3.0
++scipy==1.11.1
++send2trash==1.8.2
++sentry-sdk==1.28.0
++setproctitle==1.3.2
++setuptools==68.0.0
++shapely==2.0.1
++six==1.16.0
++smmap==5.0.0
++sniffio==1.3.0
++soupsieve==2.3.2.post1
++stack-data==0.6.2
++statsmodels==0.14.0
++tensorboard-data-server==0.7.1
++tensorboard==2.12.3
++tensorflow-datasets==4.9.2
++tensorflow-estimator==2.12.0
++tensorflow-macos==2.12.0
++tensorflow-metadata==1.13.1
++tensorflow-metal==0.8.0
++tensorflow-probability==0.20.1
++termcolor==2.3.0
++terminado==0.17.1
++threadpoolctl==3.2.0
++tinycss2==1.2.1
++toml==0.10.2
++toolz==0.12.0
++tornado==6.3.2
++tqdm==4.65.0
++traitlets==5.9.0
++typing-extensions==4.7.1
++typing-utils==0.1.0
++tzdata==2023.3
++unicodedata2==15.0.0
++urllib3==1.26.16
++wandb==0.15.5
++wcwidth==0.2.6
++webencodings==0.5.1
++websocket-client==1.6.1
++werkzeug==2.3.6
++wheel==0.40.0
++wrapt==1.14.1
++zipp==3.16.0
+\ No newline at end of file
+diff --git a/wandb/run-20230727_112543-v6x93uoc/files/wandb-metadata.json b/wandb/run-20230727_112543-v6x93uoc/files/wandb-metadata.json
+new file mode 100644
+index 0000000..c4e6d39
+--- /dev/null
++++ b/wandb/run-20230727_112543-v6x93uoc/files/wandb-metadata.json
+@@ -0,0 +1,33 @@
++{
++    "os": "macOS-12.5.1-arm64-arm-64bit",
++    "python": "3.10.12",
++    "heartbeatAt": "2023-07-27T10:25:44.680243",
++    "startedAt": "2023-07-27T10:25:43.702587",
++    "docker": null,
++    "cuda": null,
++    "args": [],
++    "state": "running",
++    "program": "<python with no main file>",
++    "git": {
++        "remote": "git@github.com:alisonpeard/cycloneGAN.git",
++        "commit": "cda095f32b7ed64df3974fd77bc182995e63baeb"
++    },
++    "email": null,
++    "root": "/Users/alison/Documents/DPhil/multivariate/cycloneGAN",
++    "host": "Alisons-MacBook-Pro.local",
++    "username": "alison",
++    "executable": "/Users/alison/mambaforge/envs/tensorflow/bin/python",
++    "cpu_count": 8,
++    "cpu_count_logical": 8,
++    "disk": {
++        "total": 460.4317207336426,
++        "used": 424.65124893188477
++    },
++    "gpuapple": {
++        "type": "arm",
++        "vendor": "Apple"
++    },
++    "memory": {
++        "total": 16.0
++    }
++}
+diff --git a/wandb/run-20230727_112543-v6x93uoc/files/wandb-summary.json b/wandb/run-20230727_112543-v6x93uoc/files/wandb-summary.json
+new file mode 100644
+index 0000000..9e26dfe
+--- /dev/null
++++ b/wandb/run-20230727_112543-v6x93uoc/files/wandb-summary.json
+@@ -0,0 +1 @@
++{}
+\ No newline at end of file
+diff --git a/wandb/run-20230727_112543-v6x93uoc/run-v6x93uoc.wandb b/wandb/run-20230727_112543-v6x93uoc/run-v6x93uoc.wandb
+new file mode 100644
+index 0000000..e69de29
