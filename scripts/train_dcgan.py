@@ -15,12 +15,11 @@ from wandb.keras import WandbCallback
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
-import DCGAN
-import tf_utils
-import viz_utils
+from evtGAN import DCGAN, tf_utils, viz_utils
+
+global rundir
 
 plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
-
 
 # some static variables
 paddings = tf.constant([[0,0],[1,1],[1,1], [0,0]])
@@ -29,7 +28,7 @@ conditions = "all"
 im_size = (19, 23)
 cwd = os.getcwd()
 wd = os.path.join(cwd, "..")
-roots = [os.path.join(wd, "wind_data", "u10_dailymax.csv"), os.path.join(wd, "wind_data", "v10_dailymax.csv")]
+roots = [os.path.join(wd, "..", "wind_data", "u10_dailymax.csv"), os.path.join(wd, "..", "wind_data", "v10_dailymax.csv")]
 imdir = os.path.join(cwd, 'figures', 'temp')
 
 
@@ -47,6 +46,7 @@ def main(config):
     chi_score = DCGAN.ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
     cross_entropy = DCGAN.CrossEntropy(next(iter(test)))
 
+    import pdb; pdb.set_trace()
     # compile
     with tf.device('/gpu:0'):
         gan = DCGAN.compile_dcgan(config)
@@ -75,6 +75,10 @@ def main(config):
 
 if __name__ == "__main__":
     wandb.init(settings=wandb.Settings(code_dir="."))
+
+    rundir = os.path.join(wd, "saved-models", wandb.run.name)
+    os.makedirs(rundir)
+
     tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf
     tf.config.experimental.enable_op_determinism()  # removes stochasticity from individual operations
     main(wandb.config)
