@@ -1,11 +1,11 @@
 import os
 import numpy as np
-import tf_utils
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 # import geopandas as gpd
 
+from .tf_utils import *
 
 def plot_generated_marginals(fake_data, start=0, channel=0):
     print(f"Range: [{fake_data.min():.2f}, {fake_data.max():.2f}]")
@@ -38,9 +38,9 @@ def compare_ecs_plot(train_images, test_images, fake_data, train_orig_images, ch
 
     for i, sample_pixels in enumerate([(35, 60), (39, 60), (50, 395)]):
         ax = axs[i, :]
-        tf_utils.plot_sample_density(train_images[..., channel], train_orig_images[..., channel], ax[0], celcius=False, sample_pixels=sample_pixels)
-        tf_utils.plot_sample_density(test_images[..., channel], train_orig_images[..., channel], ax[1], celcius=False, sample_pixels=sample_pixels)
-        tf_utils.plot_sample_density(fake_data[..., channel], train_orig_images[..., channel], ax[2], celcius=False, sample_pixels=sample_pixels)
+        plot_sample_density(train_images[..., channel], train_orig_images[..., channel], ax[0], celcius=False, sample_pixels=sample_pixels)
+        plot_sample_density(test_images[..., channel], train_orig_images[..., channel], ax[1], celcius=False, sample_pixels=sample_pixels)
+        plot_sample_density(fake_data[..., channel], train_orig_images[..., channel], ax[2], celcius=False, sample_pixels=sample_pixels)
 
     for axi in axs:
         for ax in axi:
@@ -59,21 +59,21 @@ def compare_channels_plot(train_images, test_images, fake_data):
         data_sample = tf.gather(data_ravel, i, axis=1).numpy()
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
-        tf_utils.scatter_density(x, y, ax=ax[0])
+        scatter_density(x, y, ax=ax[0])
 
         n, h, w, c = test_images.shape
         data_ravel = tf.reshape(test_images, [n, h * w, c])
         data_sample = tf.gather(data_ravel, i, axis=1).numpy()
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
-        tf_utils.scatter_density(x, y, ax=ax[1])
+        scatter_density(x, y, ax=ax[1])
 
         n, h, w, c = fake_data.shape
         data_ravel = tf.reshape(fake_data, [n, h * w, c])
         data_sample = tf.gather(data_ravel, i, axis=1).numpy()
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
-        tf_utils.scatter_density(x, y, ax=ax[2])
+        scatter_density(x, y, ax=ax[2])
 
         for a in ax:
             a.set_xlabel('u10')

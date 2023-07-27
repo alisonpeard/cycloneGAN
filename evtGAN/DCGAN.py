@@ -9,7 +9,6 @@ from tensorflow.keras import layers
 from tensorflow.keras.callbacks import Callback
 from tensorflow.nn import sigmoid_cross_entropy_with_logits as cross_entropy
 
-import tf_utils
 
 # for plotting
 import matplotlib.pyplot as plt
