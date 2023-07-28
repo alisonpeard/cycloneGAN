@@ -30,8 +30,7 @@ root = "/Users/alison/Documents/DPhil/multivariate/wind_data/"
 if __name__ == "__main__":
     for dim in ["u10", "v10"]:
         inpath = os.path.join(root, f"{dim}_dailymax.csv")
-        df = pd.read_csv(inpath)#.sample(frac=1).reset_index(drop=True)  # shuffle
-        import pdb; pdb.set_trace()
+        df = pd.read_csv(inpath).sample(frac=1).reset_index(drop=True)  # shuffle
         n = len(df)
         assert train_size < n, f"Requested train size ({train_size}) exceeds size of dataset ({n})."
 

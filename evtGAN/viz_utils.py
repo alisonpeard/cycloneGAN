@@ -51,11 +51,11 @@ def plot_sample_density(data, ax, sample_pixels=None):
     sample_x = tf.gather(data_ravel, sample_pixels_x, axis=1)
     sample_y = tf.gather(data_ravel, sample_pixels_y, axis=1)
 
-    frechet_x = -tf.math.log(1 - sample_x)
-    frechet_y = -tf.math.log(1 - sample_y)
-
-    ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
-    scatter_density(sample_x.numpy(), sample_y.numpy(), ax, title=f'$\chi$: {ec_xy:4f}')
+    # frechet_x = -tf.math.log(1 - sample_x)
+    # frechet_y = -tf.math.log(1 - sample_y)
+    # ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
+    axtitle = f"Pixels ({sample_pixels_x[0]}, {sample_pixels_y[0]})"
+    scatter_density(sample_x.numpy(), sample_y.numpy(), ax, title=axtitle)
 
 
 def scatter_density(x, y, ax, title=''):
@@ -68,19 +68,33 @@ def scatter_density(x, y, ax, title=''):
     return ax
 
 
-def compare_ecs_plot(train_images, test_images, fake_data, channel=0):
+def compare_ecs_plot(train_images, test_images, fake_data, params_train=None, params_test=None, channel=0):
+    """Assumes data provided as marginals unless params are provided"""
+    corrs = {'low': (2826, 3160), 'medium': (2362, 1945), 'high': (863, 987)}
     fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
 
-    for i, sample_pixels in enumerate([(35, 60), (39, 60), (50, 395)]):
+    for i, sample_pixels in enumerate([*corrs.values()]):
         ax = axs[i, :]
         plot_sample_density(train_images[..., channel], ax[0], sample_pixels=sample_pixels)
         plot_sample_density(test_images[..., channel], ax[1], sample_pixels=sample_pixels)
         plot_sample_density(fake_data[..., channel], ax[2], sample_pixels=sample_pixels)
 
+        ec = get_ecs(train_images[..., channel], sample_pixels, params=params_train)[0]
+        ax[0].set_title(f'$\chi$: {ec:.4f}')
+        ec = get_ecs(test_images[..., channel], sample_pixels, params=params_test)[0]
+        ax[1].set_title(f'$\chi$: {ec:.4f}')
+        ec = get_ecs(fake_data[..., channel], sample_pixels, params=params_train)[0]
+        ax[2].set_title(f'$\chi$: {ec:.4f}')
+
     for axi in axs:
         for ax in axi:
-            ax.set_xlabel(r'wind speed (ms$^{-1}$)')
-            ax.set_ylabel(r'wind speed (ms$^{-1}$)')
+            if params_train is not None:
+                ax.set_xlabel(r'wind speed (ms$^{-1}$)')
+                ax.set_ylabel(r'wind speed (ms$^{-1}$)')
+            else:
+                ax.set_xlabel(r'wind speed marginal')
+                ax.set_ylabel(r'wind speed marginal')
+
     fig.suptitle(f'Correlations: dimension {channel}')
     return fig
 
@@ -113,7 +127,6 @@ def compare_channels_plot(train_images, test_images, fake_data):
         for a in ax:
             a.set_xlabel('u10')
             a.set_ylabel('v10')
-
     return fig
 
 

@@ -12,10 +12,6 @@ from scipy import stats
 
 SEED = 42
 
-def kelvinToCelsius(kelvin):
-    return (kelvin - 273.15)
-
-
 def tf_unpad(tensor, paddings):
     """Mine: remove Tensor paddings"""
     unpaddings = [slice(pad.numpy()[0], -pad.numpy()[1]) if sum(pad.numpy()>0)  else slice(None, None) for pad in paddings]
@@ -30,37 +26,41 @@ def fit_gev(dataset):
 def gev_marginals(dataset, params):
     """Transform dataset to marginals of generalised extreme value distribution."""
     m = dataset.shape[1]
-    marginals = np.array([genextreme.cdf(dataset[..., j], *params[j]) for j in range(m)]).T
+    marginals = np.array([genextreme.cdf(dataset[..., j], *params[j]) for j in range(m)], dtype=np.float32).T
     return marginals
 
 def gev_quantiles(marginals, params):
     """Transform marginals of generalised extreme value distribution to original scale."""
     m = marginals.shape[1]
-    quantiles = np.array([genextreme.ppf(marginals[..., j], *params[j]) for j in range(m)]).T
+    quantiles = np.array([genextreme.ppf(marginals[..., j], *params[j]) for j in range(m)], dtype=np.float32).T
     return quantiles
 
-# marginals_to_winds
 def marginals_to_winds(marginals, params:tuple):
+    n = marginals.shape[0]
     winds = tf.image.resize(marginals, [61, 61])
-    winds = tf.reshape(winds, [1000, 61 * 61, 2]).numpy()
+    winds = tf.reshape(winds, [n, 61 * 61, 2]).numpy()
     winds_u10 = gev_quantiles(winds[..., 0], params[0])
-    winds_u10 = np.reshape(winds_u10, [1000, 61, 61])
+    winds_u10 = np.reshape(winds_u10, [n, 61, 61])
     winds_v10 = gev_quantiles(winds[..., 0], params[1])
-    winds_v10 = np.reshape(winds_v10, [1000, 61, 61])
+    winds_v10 = np.reshape(winds_v10, [n, 61, 61])
     winds = np.stack([winds_u10, winds_v10], axis=-1)
     return winds
 
-def get_ec_variogram(x, y):
-    """Extremal correlation by variogram as in §2.1."""
-    variogram_xy = np.mean((x - y)**2)
-    ec_xy = 2 - 2 * stats.norm.cdf(np.sqrt(variogram_xy) / 2)
-    return ec_xy
+def winds_to_marginals(winds, params:tuple):
+    n = winds.shape[0]
+    marginals = tf.image.resize(winds, [61, 61])
+    marginals = tf.reshape(marginals, [n, 61 * 61, 2]).numpy()
+    marginals_u10 = gev_marginals(marginals[..., 0], params[0])
+    marginals_u10 = np.reshape(marginals_u10, [n, 61, 61])
+    marginals_v10 = gev_marginals(marginals[..., 0], params[1])
+    marginals_v10 = np.reshape(marginals_v10, [n, 61, 61])
+    marginals = np.stack([marginals_u10, marginals_v10], axis=-1)
+    return marginals
 
 
 def frechet_transform(uniform):
     """Apply to Tensor transformed to uniform using ecdf."""
     return - 1 / tf.math.log(uniform)
-
 
 
 ####################################################
@@ -79,25 +79,28 @@ def tail_dependence_diff(data, noise, sample_size):
     return l2_tr
 
 
-def get_ecs(data, sample_inds):
+def get_ecs(data, sample_inds, params=None):
+    """TODO: If data is not already transformed to marginals, provide params"""
     # process to nice shape
-    n, h, w, _ = tf.shape(data)
+    data = tf.cast(data, dtype=tf.float32)
+    n, h, w = tf.shape(data)[:3]
     data = tf.reshape(data, [n, h * w])
     data = tf.gather(data, sample_inds, axis=1)
 
-    # transform to uniform distribuion over each marginal then Fréchet (not fully justified)
-    uniform = tf.map_fn(lambda x: tfd.Empirical(data[:, x]).cdf(data[:, x])*(n/(n+1)), tf.range(tf.shape(data)[1]), dtype=tf.float32)
-    frechet = tf_inv_exp(uniform)
+    if params is not None: # transform to marginals
+        params = tf.gather(params, sample_inds, axis=0)
+        data = gev_marginals(data, params)
+        frechet = tf_inv_exp(data)
 
     ecs = []
     for i in range(len(sample_inds)):
         for j in range(i):
-            ecs.append(raw_extremal_correlation(frechet[i], frechet[j]))
-
+            ecs.append(raw_extremal_correlation(frechet[:, i], frechet[:, j]))
     return ecs
 
+
 def tf_inv_exp(uniform):
-    uniform *= 0.9999
+    if (uniform == 1).any(): uniform *= 0.9999
     exp_distributed = -tf.math.log(1-uniform)
     return exp_distributed
 
@@ -121,20 +124,15 @@ def raw_extremal_correlation(frechet_x, frechet_y):
 ########################################################################################################
 
 def load_marginals(indir, conditions="all", dim="u10", output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
-    cyclone_marginals_train = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_train.npy"))
-    normal_marginals_train = np.load(os.path.join(indir, f"normal_marginals_{dim}_train.npy"))
-    cyclone_marginals_test = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_test.npy"))
-    normal_marginals_test = np.load(os.path.join(indir, f"normal_marginals_{dim}_test.npy"))
 
     if conditions == "all":
-        train = np.vstack([cyclone_marginals_train, normal_marginals_train])
-        test = np.vstack([cyclone_marginals_test, normal_marginals_test])
-    elif conditions == "normal":
-        train = normal_marginals_train
-        test = normal_marginals_test
+        train = np.load(os.path.join(indir, f"marginals_{dim}_train.npy"))
+        test = np.load(os.path.join(indir, f"marginals_{dim}_test.npy"))
     elif conditions == "cyclone":
-        train = cyclone_marginals_train
-        test = cyclone_marginals_test
+        train = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_train.npy"))
+        test = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_test.npy"))
+    else:
+        raise Exception("Invalid conditions")
 
     train_size = len(train)
     train = tf.convert_to_tensor(train, dtype='float32')
@@ -151,20 +149,14 @@ def load_marginals(indir, conditions="all", dim="u10", output_size=(19, 23), pad
     return train, test
 
 def load_winds(indir, conditions="all", dim="u10"):
-    cyclone_train = np.load(os.path.join(indir, f"cyclone_original_{dim}_train.npy"))
-    normal_train = np.load(os.path.join(indir, f"normal_original_{dim}_train.npy"))
-    cyclone_test = np.load(os.path.join(indir, f"cyclone_original_{dim}_test.npy"))
-    normal_test = np.load(os.path.join(indir, f"normal_original_{dim}_test.npy"))
-
     if conditions == "all":
-        train = np.vstack([cyclone_train, normal_train])
-        test = np.vstack([cyclone_test, normal_test])
-    elif conditions == "normal":
-        train = normal_train
-        test = normal_test
+        train = np.load(os.path.join(indir, f"original_{dim}_train.npy"))
+        test = np.load(os.path.join(indir, f"original_{dim}_test.npy"))
     elif conditions == "cyclone":
-        train = cyclone_train
-        test = cyclone_test
+        train = np.load(os.path.join(indir, f"cyclone_original_{dim}_train.npy"))
+        test = np.load(os.path.join(indir, f"cyclone_original_{dim}_test.npy"))
+    else:
+        raise Exception("Invalid conditions")
 
     train_size = len(train)
     train = tf.convert_to_tensor(train, dtype='float32')
@@ -178,6 +170,7 @@ def load_winds(indir, conditions="all", dim="u10"):
 
 def load_test_images(indir, train_size, conditions="all", dims=["u10", "v10"]):
     """Wrapper function to load ERA5 with certain conditions (for hyperparameter tuning)."""
+    assert conditions in ["all", "cyclones"], "Invalid conditions"
     indir = os.path.join(indir, f"train_{train_size}")
     test_sets = []
     train_sets = []

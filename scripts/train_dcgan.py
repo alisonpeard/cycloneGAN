@@ -48,6 +48,8 @@ def main(config):
 
     params_u10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_u10_train.npy"))
     params_v10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_v10_train.npy"))
+    params_u10_test = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_u10_test.npy"))
+    params_v10_test = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_v10_test.npy"))
 
     # train test callbacks
     chi_score = ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
@@ -56,6 +58,8 @@ def main(config):
     # compile
     with tf.device('/gpu:0'):
         gan = compile_dcgan(config)
+        gan.generator.load_weights("/Users/alison/Documents/DPhil/multivariate/saved_models/lilac-pine-10_generator_weights")
+        gan.discriminator.load_weights("/Users/alison/Documents/DPhil/multivariate/saved_models/lilac-pine-10_discriminator_weights")
         gan.fit(train, epochs=config.nepochs, callbacks=[WandbCallback(), chi_score, cross_entropy])
 
     gan.generator.save_weights(os.path.join(rundir, f'generator_weights'))
@@ -70,18 +74,19 @@ def main(config):
     fig = viz_utils.plot_generated_marginals(fake_marginals)
     log_image_to_wandb(fig, f'generated_marginals', imdir)
 
-    fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, channel=0)
+    fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, params_u10, params_u10_test, channel=0)
     log_image_to_wandb(fig, 'correlations_u10', imdir)
 
-    fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, channel=1)
+    fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, params_u10, params_u10_test, channel=1)
     log_image_to_wandb(fig, 'correlations_v10', imdir)
 
     fig = viz_utils.compare_channels_plot(train_images, test_images, fake_winds)
     log_image_to_wandb(fig, 'correlations multivariate', imdir)
+    plt.show()
 
 
 if __name__ == "__main__":
-    wandb.init(settings=wandb.Settings(code_dir=[".", "/Users/alison/Documents/DPhil/multivariate/cycloneGAN/scripts"]))  # saves snapshot of code as artifact (less useful now)
+    wandb.init(settings=wandb.Settings(code_dir="."))  # saves snapshot of code as artifact (less useful now)
 
     rundir = os.path.join(cwd, "saved-models", wandb.run.name)
     os.makedirs(rundir)
