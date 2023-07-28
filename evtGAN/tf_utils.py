@@ -78,6 +78,7 @@ def tail_dependence_diff(data, noise, sample_size):
     l2_tr = tf.math.sqrt(tf.reduce_mean((tf.stack(ecs_gen) - tf.stack(ecs_tr))**2))
     return l2_tr
 
+
 def get_ecs(data, sample_inds):
     # process to nice shape
     n, h, w, _ = tf.shape(data)
@@ -113,7 +114,7 @@ def raw_extremal_correlation(frechet_x, frechet_y):
     if tf.greater(tf.reduce_sum(minima), 0):
         theta = n / minima
     else:
-        tf.print("All zeros in minima array.")
+        tf.print("Warning: all zeros in minima array.")
         theta = 2
     return theta
 
@@ -186,7 +187,7 @@ def load_test_images(indir, train_size, conditions="all", dims=["u10", "v10"]):
         test_sets.append(test[..., 0])
     train_ims = tf.stack(train_sets, axis=-1)
     test_ims = tf.stack(test_sets, axis=-1)
-    return test_ims
+    return train_ims, test_ims
 
 
 def load_datasets(indir, train_size, batch_size, conditions="all", dims=["u10", "v10"], output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):

@@ -55,7 +55,7 @@ def plot_sample_density(data, ax, sample_pixels=None):
     frechet_y = -tf.math.log(1 - sample_y)
 
     ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
-    scatter_density(sample_x, sample_y, ax, title=f'$\chi$: {ec_xy:4f}')
+    scatter_density(sample_x.numpy(), sample_y.numpy(), ax, title=f'$\chi$: {ec_xy:4f}')
 
 
 def scatter_density(x, y, ax, title=''):

@@ -1,0 +1,73 @@
+diff --git a/evtGAN/tf_utils.py b/evtGAN/tf_utils.py
+index fc8ac9d..359c8bb 100644
+--- a/evtGAN/tf_utils.py
++++ b/evtGAN/tf_utils.py
+@@ -186,7 +186,7 @@ def load_test_images(indir, train_size, conditions="all", dims=["u10", "v10"]):
+         test_sets.append(test[..., 0])
+     train_ims = tf.stack(train_sets, axis=-1)
+     test_ims = tf.stack(test_sets, axis=-1)
+-    return test_ims
++    return train_ims, test_ims
+ 
+ 
+ def load_datasets(indir, train_size, batch_size, conditions="all", dims=["u10", "v10"], output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
+diff --git a/evtGAN/viz_utils.py b/evtGAN/viz_utils.py
+index 07d0707..8b1a593 100644
+--- a/evtGAN/viz_utils.py
++++ b/evtGAN/viz_utils.py
+@@ -48,6 +48,7 @@ def plot_sample_density(data, ax, sample_pixels=None):
+ 
+     data_ravel = tf.reshape(data, [len(data), n])
+ 
++    import pdb; pdb.set_trace()
+     sample_x = tf.gather(data_ravel, sample_pixels_x, axis=1)
+     sample_y = tf.gather(data_ravel, sample_pixels_y, axis=1)
+ 
+diff --git a/scripts/train_dcgan.py b/scripts/train_dcgan.py
+index 2df23ee..643c4f5 100644
+--- a/scripts/train_dcgan.py
++++ b/scripts/train_dcgan.py
+@@ -43,6 +43,8 @@ def main(config):
+     # load data
+     train, test = tf_utils.load_datasets(indir, config.train_size, config.batch_size, conditions=conditions)
+     train_images, test_images = tf_utils.load_test_images(indir, config.train_size, conditions=conditions)
++    train_images = train_images.numpy()
++    test_images = test_images.numpy()
+ 
+     params_u10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_u10_train.npy"))
+     params_v10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_v10_train.npy"))
+@@ -63,19 +65,19 @@ def main(config):
+     fake_marginals = gan(1000)
+     fake_marginals = tf_utils.tf_unpad(fake_marginals, paddings)
+     fake_winds = tf_utils.marginals_to_winds(fake_marginals, (params_u10, params_v10))
++    fake_marginals = fake_marginals.numpy()
+ 
+     fig = viz_utils.plot_generated_marginals(fake_marginals)
+     log_image_to_wandb(fig, f'generated_marginals', imdir)
+ 
+-    # TODO: modify to use params
+-
+-    import pdb; pdb.set_trace()
+     fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, channel=0)
+     log_image_to_wandb(fig, 'correlations_u10', imdir)
+ 
++    import pdb; pdb.set_trace()
+     fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, channel=1)
+     log_image_to_wandb(fig, 'correlations_v10', imdir)
+ 
++    import pdb; pdb.set_trace()
+     fig = viz_utils.compare_channels_plot(train_images, test_images, fake_winds)
+     log_image_to_wandb(fig, 'correlations multivariate', imdir)
+ 
+diff --git a/scripts/wandb/latest-run b/scripts/wandb/latest-run
+index d9bf94a..a9c0fc4 120000
+--- a/scripts/wandb/latest-run
++++ b/scripts/wandb/latest-run
+@@ -1 +1 @@
+-run-20230727_180508-f8zf200n
+\ No newline at end of file
++run-20230727_181127-dkz2kv8d
+\ No newline at end of file
+diff --git a/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb b/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb
+index e69de29..a6f7ce0 100644
+Binary files a/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb and b/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb differ

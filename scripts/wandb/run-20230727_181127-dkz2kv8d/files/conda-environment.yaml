@@ -1,0 +1,4 @@
+name: tensorflow
+channels:
+  - defaults
+prefix: /Users/alison/miniconda3/envs/tensorflow

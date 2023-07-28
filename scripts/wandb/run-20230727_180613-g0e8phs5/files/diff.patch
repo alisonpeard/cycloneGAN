@@ -1,0 +1,25 @@
+diff --git a/evtGAN/tf_utils.py b/evtGAN/tf_utils.py
+index fc8ac9d..359c8bb 100644
+--- a/evtGAN/tf_utils.py
++++ b/evtGAN/tf_utils.py
+@@ -186,7 +186,7 @@ def load_test_images(indir, train_size, conditions="all", dims=["u10", "v10"]):
+         test_sets.append(test[..., 0])
+     train_ims = tf.stack(train_sets, axis=-1)
+     test_ims = tf.stack(test_sets, axis=-1)
+-    return test_ims
++    return train_ims, test_ims
+ 
+ 
+ def load_datasets(indir, train_size, batch_size, conditions="all", dims=["u10", "v10"], output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
+diff --git a/scripts/wandb/latest-run b/scripts/wandb/latest-run
+index d9bf94a..fd593f5 120000
+--- a/scripts/wandb/latest-run
++++ b/scripts/wandb/latest-run
+@@ -1 +1 @@
+-run-20230727_180508-f8zf200n
+\ No newline at end of file
++run-20230727_180613-g0e8phs5
+\ No newline at end of file
+diff --git a/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb b/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb
+index e69de29..a6f7ce0 100644
+Binary files a/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb and b/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb differ

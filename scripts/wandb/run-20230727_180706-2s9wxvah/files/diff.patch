@@ -1,0 +1,51 @@
+diff --git a/evtGAN/tf_utils.py b/evtGAN/tf_utils.py
+index fc8ac9d..359c8bb 100644
+--- a/evtGAN/tf_utils.py
++++ b/evtGAN/tf_utils.py
+@@ -186,7 +186,7 @@ def load_test_images(indir, train_size, conditions="all", dims=["u10", "v10"]):
+         test_sets.append(test[..., 0])
+     train_ims = tf.stack(train_sets, axis=-1)
+     test_ims = tf.stack(test_sets, axis=-1)
+-    return test_ims
++    return train_ims, test_ims
+ 
+ 
+ def load_datasets(indir, train_size, batch_size, conditions="all", dims=["u10", "v10"], output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
+diff --git a/scripts/train_dcgan.py b/scripts/train_dcgan.py
+index 2df23ee..e731b58 100644
+--- a/scripts/train_dcgan.py
++++ b/scripts/train_dcgan.py
+@@ -64,7 +64,8 @@ def main(config):
+     fake_marginals = tf_utils.tf_unpad(fake_marginals, paddings)
+     fake_winds = tf_utils.marginals_to_winds(fake_marginals, (params_u10, params_v10))
+ 
+-    fig = viz_utils.plot_generated_marginals(fake_marginals)
++    import pdb; pdb.set_trace()
++    fig = viz_utils.plot_generated_marginals(fake_marginals.numpy())
+     log_image_to_wandb(fig, f'generated_marginals', imdir)
+ 
+     # TODO: modify to use params
+@@ -73,9 +74,11 @@ def main(config):
+     fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, channel=0)
+     log_image_to_wandb(fig, 'correlations_u10', imdir)
+ 
++    import pdb; pdb.set_trace()
+     fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, channel=1)
+     log_image_to_wandb(fig, 'correlations_v10', imdir)
+ 
++    import pdb; pdb.set_trace()
+     fig = viz_utils.compare_channels_plot(train_images, test_images, fake_winds)
+     log_image_to_wandb(fig, 'correlations multivariate', imdir)
+ 
+diff --git a/scripts/wandb/latest-run b/scripts/wandb/latest-run
+index d9bf94a..e7a72a7 120000
+--- a/scripts/wandb/latest-run
++++ b/scripts/wandb/latest-run
+@@ -1 +1 @@
+-run-20230727_180508-f8zf200n
+\ No newline at end of file
++run-20230727_180706-2s9wxvah
+\ No newline at end of file
+diff --git a/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb b/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb
+index e69de29..a6f7ce0 100644
+Binary files a/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb and b/scripts/wandb/run-20230727_180508-f8zf200n/run-f8zf200n.wandb differ

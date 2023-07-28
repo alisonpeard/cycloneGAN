@@ -43,6 +43,8 @@ def main(config):
     # load data
     train, test = tf_utils.load_datasets(indir, config.train_size, config.batch_size, conditions=conditions)
     train_images, test_images = tf_utils.load_test_images(indir, config.train_size, conditions=conditions)
+    train_images = train_images.numpy()
+    test_images = test_images.numpy()
 
     params_u10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_u10_train.npy"))
     params_v10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_v10_train.npy"))
@@ -63,13 +65,11 @@ def main(config):
     fake_marginals = gan(1000)
     fake_marginals = tf_utils.tf_unpad(fake_marginals, paddings)
     fake_winds = tf_utils.marginals_to_winds(fake_marginals, (params_u10, params_v10))
+    fake_marginals = fake_marginals.numpy()
 
     fig = viz_utils.plot_generated_marginals(fake_marginals)
     log_image_to_wandb(fig, f'generated_marginals', imdir)
 
-    # TODO: modify to use params
-
-    import pdb; pdb.set_trace()
     fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, channel=0)
     log_image_to_wandb(fig, 'correlations_u10', imdir)
 
@@ -81,7 +81,7 @@ def main(config):
 
 
 if __name__ == "__main__":
-    wandb.init(settings=wandb.Settings(code_dir="."))
+    wandb.init(settings=wandb.Settings(code_dir=[".", "/Users/alison/Documents/DPhil/multivariate/cycloneGAN/scripts"]))  # saves snapshot of code as artifact (less useful now)
 
     rundir = os.path.join(cwd, "saved-models", wandb.run.name)
     os.makedirs(rundir)
