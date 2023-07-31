@@ -88,7 +88,7 @@ def main(config):
 if __name__ == "__main__":
     wandb.init(settings=wandb.Settings(code_dir="."))  # saves snapshot of code as artifact (less useful now)
 
-    rundir = os.path.join(cwd, "saved-models", wandb.run.name)
+    rundir = os.path.join(wd, "saved-models", wandb.run.name)
     os.makedirs(rundir)
 
     tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf

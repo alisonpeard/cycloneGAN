@@ -31,29 +31,31 @@ def gev_marginals(dataset, params):
 
 def gev_quantiles(marginals, params):
     """Transform marginals of generalised extreme value distribution to original scale."""
+    marginals = tf.where(marginals > 0., marginals, 1e-6)
+    marginals = tf.where(marginals < 1., marginals, 1 - 1e-6)
     m = marginals.shape[1]
     quantiles = np.array([genextreme.ppf(marginals[..., j], *params[j]) for j in range(m)], dtype=np.float32).T
     return quantiles
 
 def marginals_to_winds(marginals, params:tuple):
     n = marginals.shape[0]
-    winds = tf.image.resize(marginals, [61, 61])
-    winds = tf.reshape(winds, [n, 61 * 61, 2]).numpy()
+    winds = tf.image.resize(marginals, [18, 22]) # should be unecessary
+    winds = tf.reshape(winds, [n, 18 * 22, 2]).numpy()
     winds_u10 = gev_quantiles(winds[..., 0], params[0])
-    winds_u10 = np.reshape(winds_u10, [n, 61, 61])
+    winds_u10 = np.reshape(winds_u10, [n, 18, 22])
     winds_v10 = gev_quantiles(winds[..., 0], params[1])
-    winds_v10 = np.reshape(winds_v10, [n, 61, 61])
+    winds_v10 = np.reshape(winds_v10, [n, 18, 22])
     winds = np.stack([winds_u10, winds_v10], axis=-1)
     return winds
 
 def winds_to_marginals(winds, params:tuple):
     n = winds.shape[0]
-    marginals = tf.image.resize(winds, [61, 61])
-    marginals = tf.reshape(marginals, [n, 61 * 61, 2]).numpy()
+    marginals = tf.image.resize(winds, [18, 22]) # should be unecessary
+    marginals = tf.reshape(marginals, [n, 18 * 22, 2]).numpy()
     marginals_u10 = gev_marginals(marginals[..., 0], params[0])
-    marginals_u10 = np.reshape(marginals_u10, [n, 61, 61])
+    marginals_u10 = np.reshape(marginals_u10, [n, 18, 22])
     marginals_v10 = gev_marginals(marginals[..., 0], params[1])
-    marginals_v10 = np.reshape(marginals_v10, [n, 61, 61])
+    marginals_v10 = np.reshape(marginals_v10, [n, 18, 22])
     marginals = np.stack([marginals_u10, marginals_v10], axis=-1)
     return marginals
 
@@ -62,6 +64,67 @@ def frechet_transform(uniform):
     """Apply to Tensor transformed to uniform using ecdf."""
     return - 1 / tf.math.log(uniform)
 
+def transform_to_marginals(dataset):
+    assert dataset.ndim == 4, "Function takes rank 4 arrays."
+    n, h, w, c = dataset.shape
+    dataset = dataset.reshape(n, h * w, c)
+    marginals = []
+    for channel in range(c):
+        marginals.append(marginal(dataset[..., channel]))
+    marginals = np.stack(marginals, axis=-1)
+    marginals = marginals.reshape(n, h, w, c)
+    return marginals
+        
+
+def marginal(dataset):
+    a = ecdf(dataset)
+    J = np.shape(a)[1]
+    n = np.shape(a)[0]
+    z = n * (-1)
+    for j in range(J):
+        if np.sum(a[:, j]) == z:
+            a[:, j] = np.zeros(np.shape(a[:, j])[0])
+    return a
+
+
+def ecdf(dataset):
+    return rank(dataset) / (len(dataset) + 1)
+
+
+def rank(dataset):
+    ranked = np.empty(np.shape(dataset))
+    for j in range(np.shape(ranked)[1]):
+        if all(i == dataset[0,j] for i in dataset[:,j]):
+            ranked[:,j] = len(ranked[:,j]) / 2 + 0.5
+        else:
+            array = dataset[:,j]
+            temp = array.argsort()
+            ranks = np.empty_like(temp)
+            ranks[temp] = np.arange(len(array))
+            ranked[:,j] = ranks + 1
+    return ranked
+
+
+def transform_to_quantiles(marginals, data):
+    assert marginals.ndim == 4, "Function takes rank 4 arrays"
+    n, h, w, c = marginals.shape
+    assert data.shape[1:] == (h, w, c), "Marginals and data have different dimensions"
+    
+    marginals = marginals.reshape(n, h * w, c)
+    data = data.reshape(len(data), h * w, c)
+    quantiles = []
+    for channel in range(c):
+        q = np.array([equantile(marginals[:, j, channel], data[:, j, channel]) for j in range(h * w)]).T
+        quantiles.append(q)
+    quantiles = np.stack(quantiles, axis=-1)
+    quantiles = quantiles.reshape(n, h, w, c)
+    return quantiles
+
+
+def equantile(quantiles, x):
+    n = len(x)
+    x = sorted(x)
+    return [x[int(q * n)] for q in quantiles]
 
 ####################################################
 # Tail dependence (Χ) calculations
@@ -121,10 +184,25 @@ def raw_extremal_correlation(frechet_x, frechet_y):
         theta = 2
     return theta
 
+
+def gaussian_blur(img, kernel_size=11, sigma=5):
+    """See: https://gist.github.com/blzq/c87d42f45a8c5a53f5b393e27b1f5319"""
+    def gauss_kernel(channels, kernel_size, sigma):
+        ax = tf.range(-kernel_size // 2 + 1.0, kernel_size // 2 + 1.0)
+        xx, yy = tf.meshgrid(ax, ax)
+        kernel = tf.exp(-(xx ** 2 + yy ** 2) / (2.0 * sigma ** 2))
+        kernel = kernel / tf.reduce_sum(kernel)
+        kernel = tf.tile(kernel[..., tf.newaxis], [1, 1, channels])
+        return kernel
+
+    gaussian_kernel = gauss_kernel(tf.shape(img)[-1], kernel_size, sigma)
+    gaussian_kernel = gaussian_kernel[..., tf.newaxis]
+
+    return tf.nn.depthwise_conv2d(img, gaussian_kernel, [1, 1, 1, 1],
+                                  padding='SAME', data_format='NHWC')
 ########################################################################################################
 
-def load_marginals(indir, conditions="all", dim="u10", output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
-
+def load_marginals(indir, conditions="all", dim="u10", paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
     if conditions == "all":
         train = np.load(os.path.join(indir, f"marginals_{dim}_train.npy"))
         test = np.load(os.path.join(indir, f"marginals_{dim}_test.npy"))
@@ -136,17 +214,46 @@ def load_marginals(indir, conditions="all", dim="u10", output_size=(19, 23), pad
 
     train_size = len(train)
     train = tf.convert_to_tensor(train, dtype='float32')
-    train = tf.reshape(train, (train_size, 61, 61, 1))
-    train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+    train = tf.reshape(train, (train_size, 18, 22, 1))
+    # train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
     train = tf.pad(train, paddings)
 
     test_size = len(test)
     test = tf.convert_to_tensor(test, dtype='float32')
-    test = tf.reshape(test, (test_size, 61, 61, 1))
-    test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
+    test = tf.reshape(test, (test_size, 18, 22, 1))
+    # test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
     test = tf.pad(test, paddings)
-
     return train, test
+
+def load_all_marginals(indir, conditions="all", dims=["u10", "v10"], paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
+    trains = []
+    tests = []
+    for dim in dims:
+        if conditions == "all":
+            train = np.load(os.path.join(indir, f"marginals_{dim}_train.npy"))
+            test = np.load(os.path.join(indir, f"marginals_{dim}_test.npy"))
+        elif conditions == "cyclone":
+            train = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_train.npy"))
+            test = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_test.npy"))
+        else:
+            raise Exception("Invalid conditions")
+
+        train_size = len(train)
+        train = tf.convert_to_tensor(train, dtype='float32')
+        train = tf.reshape(train, (train_size, 18, 22, 1))
+        train = tf.pad(train, paddings)
+
+        test_size = len(test)
+        test = tf.convert_to_tensor(test, dtype='float32')
+        test = tf.reshape(test, (test_size, 18, 22, 1))
+        test = tf.pad(test, paddings)
+        trains.append(train[..., 0])
+        tests.append(test[..., 0])
+
+    train = tf.stack(trains, axis=-1)
+    test = tf.stack(tests, axis=-1)
+    return train, test
+
 
 def load_winds(indir, conditions="all", dim="u10"):
     if conditions == "all":
@@ -160,17 +267,16 @@ def load_winds(indir, conditions="all", dim="u10"):
 
     train_size = len(train)
     train = tf.convert_to_tensor(train, dtype='float32')
-    train = tf.reshape(train, (train_size, 61, 61, 1))
+    train = tf.reshape(train, (train_size, 18, 22, 1))
 
     test_size = len(test)
     test = tf.convert_to_tensor(test, dtype='float32')
-    test = tf.reshape(test, (test_size, 61, 61, 1))
+    test = tf.reshape(test, (test_size, 18, 22, 1))
     return train, test
 
 
 def load_test_images(indir, train_size, conditions="all", dims=["u10", "v10"]):
-    """Wrapper function to load ERA5 with certain conditions (for hyperparameter tuning)."""
-    assert conditions in ["all", "cyclones"], "Invalid conditions"
+    assert conditions in ["all", "cyclone"], "Invalid conditions"
     indir = os.path.join(indir, f"train_{train_size}")
     test_sets = []
     train_sets = []
@@ -183,14 +289,14 @@ def load_test_images(indir, train_size, conditions="all", dims=["u10", "v10"]):
     return train_ims, test_ims
 
 
-def load_datasets(indir, train_size, batch_size, conditions="all", dims=["u10", "v10"], output_size=(19, 23), paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
+def load_datasets(indir, train_size, batch_size, conditions="all", dims=["u10", "v10"], paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
     """Wrapper function to load ERA5 with certain conditions (for hyperparameter tuning)."""
 
     indir = os.path.join(indir, f"train_{train_size}")
     train_sets = []
     test_sets = []
     for dim in dims:
-        train, test = load_marginals(indir, dim=dim, conditions=conditions, output_size=output_size, paddings=paddings)
+        train, test = load_marginals(indir, dim=dim, conditions=conditions, paddings=paddings)
         train_sets.append(train[..., 0])
         test_sets.append(test[..., 0])
 
@@ -201,5 +307,4 @@ def load_datasets(indir, train_size, batch_size, conditions="all", dims=["u10", 
     # create datasets
     train = tf.data.Dataset.from_tensor_slices(train_ims).shuffle(len(train_ims)).batch(batch_size)
     test = tf.data.Dataset.from_tensor_slices(test_ims).shuffle(len(test_ims)).batch(batch_size)
-
     return train, test

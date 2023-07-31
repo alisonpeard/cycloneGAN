@@ -49,13 +49,17 @@ if __name__ == "__main__":
         # fit GEV to entire train and test data
         train = vals[:train_size, :]
         test = vals[train_size:, :]
-        train_params = tf_utils.fit_gev(train)  # takes some time
-        test_params = tf_utils.fit_gev(test)
-
         cyclone_train = vals[cyclone_train]
         cyclone_test = vals[cyclone_test]
 
+        train = tf.image.resize(train.reshape([len(train), 61, 61, 1]), [18, 22]).numpy().reshape([len(train), 18 * 22])
+        test = tf.image.resize(test.reshape([len(test), 61, 61, 1]), [18, 22]).numpy().reshape([len(test), 18 * 22])
+        cyclone_train = tf.image.resize(cyclone_train.reshape([len(cyclone_train), 61, 61, 1]), [18, 22]).numpy().reshape([len(cyclone_train), 18 * 22])
+        cyclone_test = tf.image.resize(cyclone_test.reshape([len(cyclone_test), 61, 61, 1]), [18, 22]).numpy().reshape([len(cyclone_test), 18 * 22])
+
         # transform to marginals
+        train_params = tf_utils.fit_gev(train)  # takes some time
+        test_params = tf_utils.fit_gev(test)
         marginals_train = tf_utils.gev_marginals(train, train_params)
         marginals_test = tf_utils.gev_marginals(test, test_params)
 
@@ -65,9 +69,9 @@ if __name__ == "__main__":
 
         # have a look
         fig, axs = plt.subplots(1, 3)
-        axs[0].imshow(cyclone_train[0, ].reshape([61, 61]))
-        axs[1].imshow(cyclone_marginals_train[0, ].reshape([61, 61]))
-        axs[2].imshow(cyclone_quantiles_train[0, ].reshape([61, 61]))
+        axs[0].imshow(cyclone_train[0, ...].reshape([18, 22]))
+        axs[1].imshow(cyclone_marginals_train[0, ...].reshape([18, 22]))
+        axs[2].imshow(cyclone_quantiles_train[0, ...].reshape([18, 22]))
         axs[0].set_title('original')
         axs[1].set_title('marginals')
         axs[2].set_title('re-transformed')

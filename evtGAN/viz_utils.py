@@ -70,7 +70,7 @@ def scatter_density(x, y, ax, title=''):
 
 def compare_ecs_plot(train_images, test_images, fake_data, params_train=None, params_test=None, channel=0):
     """Assumes data provided as marginals unless params are provided"""
-    corrs = {'low': (2826, 3160), 'medium': (2362, 1945), 'high': (863, 987)}
+    corrs = {'low': (351, 340), 'medium': (332, 335), 'high': (75, 119)}
     fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
 
     for i, sample_pixels in enumerate([*corrs.values()]):
@@ -130,11 +130,11 @@ def compare_channels_plot(train_images, test_images, fake_data):
     return fig
 
 
-def plot_one_hundred_marginals(fake_data, channel=0, **plot_kwargs):
+def plot_one_hundred_images(fake_data, channel=0, suptitle="Generated marginals", **plot_kwargs):
     fig, axs = plt.subplots(10, 10, layout='tight', figsize=(10, 10))
 
     for i, ax in enumerate(axs.ravel()):
-        im = ax.imshow(fake_data[i, ..., channel], vmin=0, vmax=1, **plot_kwargs)
+        im = ax.imshow(fake_data[i, ..., channel], **plot_kwargs)
 
     for ax in axs.ravel():
         ax.set_xticks([])
@@ -143,7 +143,7 @@ def plot_one_hundred_marginals(fake_data, channel=0, **plot_kwargs):
     divider = make_axes_locatable(ax)
     cax = divider.append_axes('right', size='5%', pad=0.05)
     fig.colorbar(im, cax=cax, orientation='vertical')
-    plt.suptitle('Generated marginals')
+    plt.suptitle(suptitle)
 
     return fig
 
