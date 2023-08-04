@@ -68,16 +68,20 @@ def scatter_density(x, y, ax, title=''):
     return ax
 
 
-def compare_ecs_plot(train_images, test_images, fake_data, params_train=None, params_test=None, channel=0):
+def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0):
     """Assumes data provided as marginals unless params are provided"""
     corrs = {'low': (351, 340), 'medium': (332, 335), 'high': (75, 119)}
     fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
 
+    train_quantiles = tf_utils.transform_to_quantiles(train_marginals, quantiles)
+    test_quantiles = tf_utils.transform_to_quantiles(test_marginals, quantiles)
+    fake_quantiles = tf_utils.transform_to_quantiles(fake_marginals, quantiles)
+
     for i, sample_pixels in enumerate([*corrs.values()]):
         ax = axs[i, :]
-        plot_sample_density(train_images[..., channel], ax[0], sample_pixels=sample_pixels)
-        plot_sample_density(test_images[..., channel], ax[1], sample_pixels=sample_pixels)
-        plot_sample_density(fake_data[..., channel], ax[2], sample_pixels=sample_pixels)
+        plot_sample_density(train_quantiles[..., channel], ax[0], sample_pixels=sample_pixels)
+        plot_sample_density(test_quantiles[..., channel], ax[1], sample_pixels=sample_pixels)
+        plot_sample_density(fake_quantiles[..., channel], ax[2], sample_pixels=sample_pixels)
 
         ec = get_ecs(train_images[..., channel], sample_pixels, params=params_train)[0]
         ax[0].set_title(f'$\chi$: {ec:.4f}')
@@ -148,19 +152,3 @@ def plot_one_hundred_images(fake_data, channel=0, suptitle="Generated marginals"
     return fig
 
 
-def plot_one_hundred_hypothenuses(fake_data, **plot_kwargs):
-    fig, axs = plt.subplots(10, 10, layout='tight', figsize=(10, 10))
-
-    for i, ax in enumerate(axs.ravel()):
-        im = ax.imshow(fake_data[i, ...], vmin=0, vmax=1, **plot_kwargs)
-
-    for ax in axs.ravel():
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes('right', size='5%', pad=0.05)
-    fig.colorbar(im, cax=cax, orientation='vertical')
-    plt.suptitle('Generated marginals')
-
-    return fig

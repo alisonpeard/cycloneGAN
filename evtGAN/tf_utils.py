@@ -17,49 +17,6 @@ def tf_unpad(tensor, paddings):
     unpaddings = [slice(pad.numpy()[0], -pad.numpy()[1]) if sum(pad.numpy()>0)  else slice(None, None) for pad in paddings]
     return tensor[unpaddings]
 
-def fit_gev(dataset):
-    """Fit GEV to dataset. Takes a while for large datasets."""
-    m = dataset.shape[1]
-    params = [genextreme.fit(dataset[..., j]) for j in range(m)]
-    return params
-
-def gev_marginals(dataset, params):
-    """Transform dataset to marginals of generalised extreme value distribution."""
-    m = dataset.shape[1]
-    marginals = np.array([genextreme.cdf(dataset[..., j], *params[j]) for j in range(m)], dtype=np.float32).T
-    return marginals
-
-def gev_quantiles(marginals, params):
-    """Transform marginals of generalised extreme value distribution to original scale."""
-    marginals = tf.where(marginals > 0., marginals, 1e-6)
-    marginals = tf.where(marginals < 1., marginals, 1 - 1e-6)
-    m = marginals.shape[1]
-    quantiles = np.array([genextreme.ppf(marginals[..., j], *params[j]) for j in range(m)], dtype=np.float32).T
-    return quantiles
-
-def marginals_to_winds(marginals, params:tuple):
-    n = marginals.shape[0]
-    winds = tf.image.resize(marginals, [18, 22]) # should be unecessary
-    winds = tf.reshape(winds, [n, 18 * 22, 2]).numpy()
-    winds_u10 = gev_quantiles(winds[..., 0], params[0])
-    winds_u10 = np.reshape(winds_u10, [n, 18, 22])
-    winds_v10 = gev_quantiles(winds[..., 0], params[1])
-    winds_v10 = np.reshape(winds_v10, [n, 18, 22])
-    winds = np.stack([winds_u10, winds_v10], axis=-1)
-    return winds
-
-def winds_to_marginals(winds, params:tuple):
-    n = winds.shape[0]
-    marginals = tf.image.resize(winds, [18, 22]) # should be unecessary
-    marginals = tf.reshape(marginals, [n, 18 * 22, 2]).numpy()
-    marginals_u10 = gev_marginals(marginals[..., 0], params[0])
-    marginals_u10 = np.reshape(marginals_u10, [n, 18, 22])
-    marginals_v10 = gev_marginals(marginals[..., 0], params[1])
-    marginals_v10 = np.reshape(marginals_v10, [n, 18, 22])
-    marginals = np.stack([marginals_u10, marginals_v10], axis=-1)
-    return marginals
-
-
 def frechet_transform(uniform):
     """Apply to Tensor transformed to uniform using ecdf."""
     return - 1 / tf.math.log(uniform)
@@ -142,18 +99,15 @@ def tail_dependence_diff(data, noise, sample_size):
     return l2_tr
 
 
-def get_ecs(data, sample_inds, params=None):
+def get_ecs(marginals, sample_inds, params=None):
     """TODO: If data is not already transformed to marginals, provide params"""
     # process to nice shape
-    data = tf.cast(data, dtype=tf.float32)
+    data = tf.cast(marginals, dtype=tf.float32)
     n, h, w = tf.shape(data)[:3]
     data = tf.reshape(data, [n, h * w])
     data = tf.gather(data, sample_inds, axis=1)
 
-    if params is not None: # transform to marginals
-        params = tf.gather(params, sample_inds, axis=0)
-        data = gev_marginals(data, params)
-        frechet = tf_inv_exp(data)
+    frechet = tf_inv_exp(data)
 
     ecs = []
     for i in range(len(sample_inds)):
@@ -200,111 +154,59 @@ def gaussian_blur(img, kernel_size=11, sigma=5):
 
     return tf.nn.depthwise_conv2d(img, gaussian_kernel, [1, 1, 1, 1],
                                   padding='SAME', data_format='NHWC')
+
+
 ########################################################################################################
 
-def load_marginals(indir, conditions="all", dim="u10", paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
-    if conditions == "all":
-        train = np.load(os.path.join(indir, f"marginals_{dim}_train.npy"))
-        test = np.load(os.path.join(indir, f"marginals_{dim}_test.npy"))
-    elif conditions == "cyclone":
-        train = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_train.npy"))
-        test = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_test.npy"))
-    else:
-        raise Exception("Invalid conditions")
+def load_data(datadir, imsize=(18, 22), conditions='all', dim=None):
+    """Load wind image data to correct size."""
+    assert conditions in ['cyclone', 'all'], "Invalid conditions."
+    datas = []
+    df = pd.read_csv(os.path.join(datadir, f"{dim}_dailymax.csv"), index_col=[0])
+    if conditions == "cyclone":
+        df = df[df['cyclone_flag']]
+    cyclone_flag = df['cyclone_flag'].values
+    df = df.drop(columns=['time', 'cyclone_flag'])
+    values = df.values.astype(float)
+    ngrids = int(np.sqrt(values.shape[1]))
+    values = values.reshape(values.shape[0], ngrids, ngrids)
+    values = np.flip(values, axis=[1])
+    values = values[..., np.newaxis]
+    data = tf.image.resize(values, (imsize[0], imsize[1]))
+    return data.numpy(), cyclone_flag
 
-    train_size = len(train)
-    train = tf.convert_to_tensor(train, dtype='float32')
-    train = tf.reshape(train, (train_size, 18, 22, 1))
-    # train = tf.image.resize(train, [output_size[0]-1, output_size[1]-1])
+
+def load_marginals(datadir, train_size=200, imsize=(18, 22), conditions="all", shuffle=False, paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
+    """Load wind data, split into train and test and converted to marginals based-on the train set."""
+    assert conditions in ['cyclone', 'all'], "Invalid conditions."
+    h, w = imsize
+    winds, cyclone_flag = load_winds(datadir, imsize, conditions)
+    n = winds.shape[0]
+    assert n > train_size, "Train size ({train_size}) > dataset size ({n})."
+    
+    if shuffle: 
+        index = [*range(n)]
+        np.random.seed(42)  # will always create same dataset
+        np.random.shuffle(index)
+        winds = winds[index]
+        cyclone_flag = cyclone_flag[index]
+    
+    train, test = winds[:train_size, ...], winds[train_size:, ...]
+    quantiles = train.copy()
+    train = transform_to_marginals(train)
+    test = transform_to_marginals(test)
     train = tf.pad(train, paddings)
-
-    test_size = len(test)
-    test = tf.convert_to_tensor(test, dtype='float32')
-    test = tf.reshape(test, (test_size, 18, 22, 1))
-    # test = tf.image.resize(test, [output_size[0]-1, output_size[1]-1])
     test = tf.pad(test, paddings)
-    return train, test
-
-def load_all_marginals(indir, conditions="all", dims=["u10", "v10"], paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
-    trains = []
-    tests = []
-    for dim in dims:
-        if conditions == "all":
-            train = np.load(os.path.join(indir, f"marginals_{dim}_train.npy"))
-            test = np.load(os.path.join(indir, f"marginals_{dim}_test.npy"))
-        elif conditions == "cyclone":
-            train = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_train.npy"))
-            test = np.load(os.path.join(indir, f"cyclone_marginals_{dim}_test.npy"))
-        else:
-            raise Exception("Invalid conditions")
-
-        train_size = len(train)
-        train = tf.convert_to_tensor(train, dtype='float32')
-        train = tf.reshape(train, (train_size, 18, 22, 1))
-        train = tf.pad(train, paddings)
-
-        test_size = len(test)
-        test = tf.convert_to_tensor(test, dtype='float32')
-        test = tf.reshape(test, (test_size, 18, 22, 1))
-        test = tf.pad(test, paddings)
-        trains.append(train[..., 0])
-        tests.append(test[..., 0])
-
-    train = tf.stack(trains, axis=-1)
-    test = tf.stack(tests, axis=-1)
-    return train, test
+    return train, test, quantiles, cyclone_flag
 
 
-def load_winds(indir, conditions="all", dim="u10"):
-    if conditions == "all":
-        train = np.load(os.path.join(indir, f"original_{dim}_train.npy"))
-        test = np.load(os.path.join(indir, f"original_{dim}_test.npy"))
-    elif conditions == "cyclone":
-        train = np.load(os.path.join(indir, f"cyclone_original_{dim}_train.npy"))
-        test = np.load(os.path.join(indir, f"cyclone_original_{dim}_test.npy"))
-    else:
-        raise Exception("Invalid conditions")
+def cyclone_transfer_set(train, test, cyclone_flag, train_size):
+    """Create a cyclone-only training set for transfer learning."""
+    ncyclones = sum(cyclone_flag) // 2
+    cyclone_train = train[cyclone_flag[:train_size]]
+    cyclone_test = test[cyclone_flag[train_size:]]
 
-    train_size = len(train)
-    train = tf.convert_to_tensor(train, dtype='float32')
-    train = tf.reshape(train, (train_size, 18, 22, 1))
-
-    test_size = len(test)
-    test = tf.convert_to_tensor(test, dtype='float32')
-    test = tf.reshape(test, (test_size, 18, 22, 1))
-    return train, test
-
-
-def load_test_images(indir, train_size, conditions="all", dims=["u10", "v10"]):
-    assert conditions in ["all", "cyclone"], "Invalid conditions"
-    indir = os.path.join(indir, f"train_{train_size}")
-    test_sets = []
-    train_sets = []
-    for dim in dims:
-        train, test = load_winds(indir, conditions, dim)
-        train_sets.append(train[..., 0])
-        test_sets.append(test[..., 0])
-    train_ims = tf.stack(train_sets, axis=-1)
-    test_ims = tf.stack(test_sets, axis=-1)
-    return train_ims, test_ims
-
-
-def load_datasets(indir, train_size, batch_size, conditions="all", dims=["u10", "v10"], paddings=tf.constant([[0,0],[1,1],[1,1],[0,0]])):
-    """Wrapper function to load ERA5 with certain conditions (for hyperparameter tuning)."""
-
-    indir = os.path.join(indir, f"train_{train_size}")
-    train_sets = []
-    test_sets = []
-    for dim in dims:
-        train, test = load_marginals(indir, dim=dim, conditions=conditions, paddings=paddings)
-        train_sets.append(train[..., 0])
-        test_sets.append(test[..., 0])
-
-    # stack them together in multichannel images
-    train_ims = tf.stack(train_sets, axis=-1)
-    test_ims = tf.stack(test_sets, axis=-1)
-
-    # create datasets
-    train = tf.data.Dataset.from_tensor_slices(train_ims).shuffle(len(train_ims)).batch(batch_size)
-    test = tf.data.Dataset.from_tensor_slices(test_ims).shuffle(len(test_ims)).batch(batch_size)
-    return train, test
+    more_train = cyclone_test[:ncyclones - cyclone_train.shape[0]]
+    cyclone_test = cyclone_test[ncyclones - cyclone_train.shape[0]:]
+    cyclone_train = tf.concat([cyclone_train, more_train], axis=0)
+    return cyclone_train, cyclone_test

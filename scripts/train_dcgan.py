@@ -23,14 +23,11 @@ global rundir
 plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
 
 # some static variables
-paddings = tf.constant([[0,0], [1,1], [1,1], [0,0]])
-var = 'wind'
-conditions = "all"
-im_size = (19, 23)
 cwd = os.getcwd()
 wd = os.path.join(cwd, "..")
-indir = "/Users/alison/Documents/DPhil/multivariate/processed_wind_data"
+datadir = "/Users/alison/Documents/DPhil/multivariate/wind_data"
 imdir = os.path.join(wd, 'figures', 'temp')
+paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])
 
 
 def log_image_to_wandb(fig, name:str, dir:str):
@@ -41,15 +38,9 @@ def log_image_to_wandb(fig, name:str, dir:str):
 
 def main(config):
     # load data
-    train, test = tf_utils.load_datasets(indir, config.train_size, config.batch_size, conditions=conditions)
-    train_images, test_images = tf_utils.load_test_images(indir, config.train_size, conditions=conditions)
-    train_images = train_images.numpy()
-    test_images = test_images.numpy()
-
-    params_u10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_u10_train.npy"))
-    params_v10 = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_v10_train.npy"))
-    params_u10_test = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_u10_test.npy"))
-    params_v10_test = np.load(os.path.join(indir, f"train_{config.train_size}", "gev_params_v10_test.npy"))
+    train_marginals, test_marginals, quantiles, cyclone_flag = tf_utils.load_marginals(datadir, config.train_size, shuffle=True, paddings=paddings)
+    train = tf.data.Dataset.from_tensor_slices(train_marginals).batch(config.batch_size)
+    test = tf.data.Dataset.from_tensor_slices(test_marginals).batch(config.batch_size)
 
     # train test callbacks
     chi_score = ChiScore({'train': next(iter(train)), 'test': next(iter(test))}, frequency=config.chi_frequency)
@@ -68,19 +59,18 @@ def main(config):
     # generate 1000 images to visualise some results
     fake_marginals = gan(1000)
     fake_marginals = tf_utils.tf_unpad(fake_marginals, paddings)
-    fake_winds = tf_utils.marginals_to_winds(fake_marginals, (params_u10, params_v10))
-    fake_marginals = fake_marginals.numpy()
+    # fake_quantiles = tf_utils.transform_to_quantiles(fake_marginals, quantiles)
 
     fig = viz_utils.plot_generated_marginals(fake_marginals)
     log_image_to_wandb(fig, f'generated_marginals', imdir)
 
-    fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, params_u10, params_u10_test, channel=0)
+    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0)
     log_image_to_wandb(fig, 'correlations_u10', imdir)
 
-    fig = viz_utils.compare_ecs_plot(train_images, test_images, fake_winds, params_u10, params_u10_test, channel=1)
+    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=1)
     log_image_to_wandb(fig, 'correlations_v10', imdir)
 
-    fig = viz_utils.compare_channels_plot(train_images, test_images, fake_winds)
+    fig = viz_utils.compare_channels_plot(train_marginals, test_marginals, fake_marginals)
     log_image_to_wandb(fig, 'correlations multivariate', imdir)
     plt.show()
 
