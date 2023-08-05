@@ -112,10 +112,19 @@ def equantile(marginals, x, params=None, thresh=None):
     x = sorted(x)
     quantiles = np.array([x[int(q * n)] for q in marginals])
     if params is not None:
+        u_x = marginals[marginals <= thresh].max()
         marginals_tail = marginals[marginals > thresh]
-        quantiles_tail = gev_ppf(marginals_tail, params)
+        quantiles_tail = upper_ppf(marginals_tail, u_x, thresh, params)
+        # quantiles_tail = gev_ppf(marginals_tail, params)
         quantiles[marginals > thresh] = quantiles_tail
     return quantiles
+
+
+def upper_ppf(marginals, u_x, thresh, params):
+    """Inverse of (1.3) H&T for $\ksi\leq 0$ and upper tail."""
+    shape, scale = params[0], params[2]
+    x = u_x + (scale / shape) * (1 - ((1 - marginals) / (1 - thresh))**shape)
+    return x
 
 
 def gev_ppf(q, params):
@@ -214,7 +223,7 @@ def load_data(datadir, imsize=(18, 22), conditions='all', dim=None):
     return data.numpy(), cyclone_flag
 
 
-def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'wave_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
+def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
     marginals = []
     quantiles = []
     params = []

@@ -48,9 +48,9 @@ def main(config):
 
     # compile
     with tf.device('/gpu:0'):
-        gan = compile_dcgan(config)
-        gan.generator.load_weights("/Users/alison/Documents/DPhil/multivariate/saved_models/lilac-pine-10_generator_weights")
-        gan.discriminator.load_weights("/Users/alison/Documents/DPhil/multivariate/saved_models/lilac-pine-10_discriminator_weights")
+        gan = compile_dcgan(config, nchannels=3)
+        # gan.generator.load_weights("/Users/alison/Documents/DPhil/multivariate/saved_models/lilac-pine-10_generator_weights")
+        # gan.discriminator.load_weights("/Users/alison/Documents/DPhil/multivariate/saved_models/lilac-pine-10_discriminator_weights")
         gan.fit(train, epochs=config.nepochs, callbacks=[WandbCallback(), chi_score, cross_entropy])
 
     gan.generator.save_weights(os.path.join(rundir, f'generator_weights'))
