@@ -25,9 +25,9 @@ plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
 # some static variables
 cwd = os.getcwd()
 wd = os.path.join(cwd, "..")
-datadir = "/Users/alison/Documents/DPhil/multivariate/wind_data"
+datadir = "/Users/alison/Documents/DPhil/multivariate"
 imdir = os.path.join(wd, 'figures', 'temp')
-paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])
+paddings = tf.constant([[0,0], [1,1], [1,1], [0,0]])
 
 
 def log_image_to_wandb(fig, name:str, dir:str):
@@ -38,7 +38,7 @@ def log_image_to_wandb(fig, name:str, dir:str):
 
 def main(config):
     # load data
-    train_marginals, test_marginals, quantiles, cyclone_flag = tf_utils.load_marginals(datadir, config.train_size, shuffle=True, paddings=paddings)
+    train_marginals, test_marginals, quantiles, params = tf_utils.load_marginals_and_quantiles(datadir, config.train_size, paddings=paddings)
     train = tf.data.Dataset.from_tensor_slices(train_marginals).batch(config.batch_size)
     test = tf.data.Dataset.from_tensor_slices(test_marginals).batch(config.batch_size)
 
@@ -57,17 +57,20 @@ def main(config):
     gan.discriminator.save_weights(os.path.join(rundir, f'discriminator_weights'))
 
     # generate 1000 images to visualise some results
+    train_marginals = tf_utils.tf_unpad(train_marginals, paddings).numpy()
+    test_marginals = tf_utils.tf_unpad(test_marginals, paddings).numpy()
+
     fake_marginals = gan(1000)
     fake_marginals = tf_utils.tf_unpad(fake_marginals, paddings)
-    # fake_quantiles = tf_utils.transform_to_quantiles(fake_marginals, quantiles)
+    fake_marginals = fake_marginals.numpy()
 
     fig = viz_utils.plot_generated_marginals(fake_marginals)
     log_image_to_wandb(fig, f'generated_marginals', imdir)
 
-    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0)
+    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0) #, params, 0.9, channel=0)
     log_image_to_wandb(fig, 'correlations_u10', imdir)
 
-    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=1)
+    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0) #, params, 0.9, channel=1)
     log_image_to_wandb(fig, 'correlations_v10', imdir)
 
     fig = viz_utils.compare_channels_plot(train_marginals, test_marginals, fake_marginals)

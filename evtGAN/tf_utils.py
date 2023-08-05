@@ -4,16 +4,15 @@ import random
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from scipy.stats import genextreme
+from scipy.stats import ecdf, genextreme
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
-from scipy.stats import gaussian_kde
-from scipy import stats
 
 SEED = 42
 
 def tf_unpad(tensor, paddings):
     """Mine: remove Tensor paddings"""
+    tensor = tf.convert_to_tensor(tensor)  # incase its a np.array
     unpaddings = [slice(pad.numpy()[0], -pad.numpy()[1]) if sum(pad.numpy()>0)  else slice(None, None) for pad in paddings]
     return tensor[unpaddings]
 
@@ -21,67 +20,110 @@ def frechet_transform(uniform):
     """Apply to Tensor transformed to uniform using ecdf."""
     return - 1 / tf.math.log(uniform)
 
-def transform_to_marginals(dataset):
-    assert dataset.ndim == 4, "Function takes rank 4 arrays."
+def gumbel_transform(uniform):
+    return -np.log(-np.log(uniform))
+
+
+def transform_to_marginals(dataset, thresh=.9, fit_tail=False):
     n, h, w, c = dataset.shape
-    dataset = dataset.reshape(n, h * w, c)
-    marginals = []
-    for channel in range(c):
-        marginals.append(marginal(dataset[..., channel]))
-    marginals = np.stack(marginals, axis=-1)
-    marginals = marginals.reshape(n, h, w, c)
-    return marginals
-        
+    assert c == 1, "single channel only"
+    dataset = dataset[..., 0].reshape(n, h * w)
+    marginals, parameters = semiparametric_cdf(dataset, thresh, fit_tail=fit_tail)
+    quantiles = interpolate_quantiles(marginals, dataset)
+    
+    marginals = marginals.reshape(n, h, w, 1)
+    parameters = parameters.reshape(h, w, 3)
+    quantiles = quantiles.reshape(10000, h, w)
+    
+    return marginals, parameters, quantiles
 
-def marginal(dataset):
-    a = ecdf(dataset)
-    J = np.shape(a)[1]
-    n = np.shape(a)[0]
-    z = n * (-1)
+
+def semiparametric_cdf(dataset, thresh, fit_tail=False):
+    assert dataset.ndim == 2, "Requires 2 dimensions"
+    x = dataset.copy()
+    n, J = np.shape(x)
+    
+    shape = np.empty(J)
+    loc = np.empty(J)
+    scale = np.empty(J)
     for j in range(J):
-        if np.sum(a[:, j]) == z:
-            a[:, j] = np.zeros(np.shape(a[:, j])[0])
-    return a
+        x[:, j], shape[j], loc[j], scale[j] = semiparametric_marginal(x[:, j], thresh=thresh, fit_tail=fit_tail)
+    parameters = np.stack([shape, loc, scale], axis=-1)
+    return x, parameters
 
 
-def ecdf(dataset):
-    return rank(dataset) / (len(dataset) + 1)
+def semiparametric_marginal(x, thresh, fit_tail=False):
+    """Heffernan & Tawn (2004). 
+    
+    Note shape parameter is opposite sign to H&T (2004)."""
+    if all(x == 0.):
+        return np.array([0.] * len(x)), 0, 0, 0
+    
+    f = ecdf(x).cdf.evaluate(x)
+    
+    if fit_tail:
+        x_tail = x[f > thresh]
+        f_tail = f[f > thresh]
+        u_x = max(x[f <= thresh])
+        shape, loc, scale = genextreme.fit(x_tail)
+        f_tail = 1 - (1 - thresh) * np.maximum(0, (1 - shape * (x_tail - u_x) / scale)) ** (1 / shape)
+        f[f >= thresh] = f_tail # distribution no longer uniform
+    else:
+        f *= 1 - 1e-6
+        shape, loc, scale = 0, 0, 0
+    return f, shape, loc, scale
 
 
-def rank(dataset):
-    ranked = np.empty(np.shape(dataset))
-    for j in range(np.shape(ranked)[1]):
-        if all(i == dataset[0,j] for i in dataset[:,j]):
-            ranked[:,j] = len(ranked[:,j]) / 2 + 0.5
-        else:
-            array = dataset[:,j]
-            temp = array.argsort()
-            ranks = np.empty_like(temp)
-            ranks[temp] = np.arange(len(array))
-            ranked[:,j] = ranks + 1
-    return ranked
+def interpolate_quantiles(marginals, quantiles, n=10000):
+    """Interpolate the quantiles for inverse transformations."""
+    assert quantiles.ndim == 2, "Requires 2 dimensions"
+    interpolation_points = np.linspace(0, 1, n)
+    J = np.shape(quantiles)[1]
+    
+    interpolated_quantiles = np.empty((n, J))
+    for j in range(J):
+        interpolated_quantiles[:, j] = np.interp(interpolation_points, sorted(marginals[..., j]), sorted(quantiles[..., j]))
+    return interpolated_quantiles
 
 
-def transform_to_quantiles(marginals, data):
+def transform_to_quantiles(marginals, data, params=None, thresh=None):
     assert marginals.ndim == 4, "Function takes rank 4 arrays"
     n, h, w, c = marginals.shape
     assert data.shape[1:] == (h, w, c), "Marginals and data have different dimensions"
     
     marginals = marginals.reshape(n, h * w, c)
     data = data.reshape(len(data), h * w, c)
+    if params is not None:
+        params = params.reshape(h * w, 3, c)
     quantiles = []
     for channel in range(c):
-        q = np.array([equantile(marginals[:, j, channel], data[:, j, channel]) for j in range(h * w)]).T
+        if params is None:
+            q = np.array([equantile(marginals[:, j, channel], data[:, j, channel]) for j in range(h * w)]).T
+        else:
+            q = np.array([equantile(marginals[:, j, channel], data[:, j, channel], params[j, ..., channel], thresh) for j in range(h * w)]).T
         quantiles.append(q)
     quantiles = np.stack(quantiles, axis=-1)
     quantiles = quantiles.reshape(n, h, w, c)
     return quantiles
 
 
-def equantile(quantiles, x):
+def equantile(marginals, x, params=None, thresh=None):
     n = len(x)
     x = sorted(x)
-    return [x[int(q * n)] for q in quantiles]
+    quantiles = np.array([x[int(q * n)] for q in marginals])
+    if params is not None:
+        marginals_tail = marginals[marginals > thresh]
+        quantiles_tail = gev_ppf(marginals_tail, params)
+        quantiles[marginals > thresh] = quantiles_tail
+    return quantiles
+
+
+def gev_ppf(q, params):
+    """To replace nans with zeros."""
+    if sum(params) > 0:
+        return genextreme.ppf(q, *params)
+    else:
+        return 0.
 
 ####################################################
 # Tail dependence (Χ) calculations
@@ -99,9 +141,7 @@ def tail_dependence_diff(data, noise, sample_size):
     return l2_tr
 
 
-def get_ecs(marginals, sample_inds, params=None):
-    """TODO: If data is not already transformed to marginals, provide params"""
-    # process to nice shape
+def get_ecs(marginals, sample_inds):
     data = tf.cast(marginals, dtype=tf.float32)
     n, h, w = tf.shape(data)[:3]
     data = tf.reshape(data, [n, h * w])
@@ -117,7 +157,7 @@ def get_ecs(marginals, sample_inds, params=None):
 
 
 def tf_inv_exp(uniform):
-    if (uniform == 1).any(): uniform *= 0.9999
+    # if (uniform == 1).any(): uniform *= 0.9999  # need a TensorFlow analogue
     exp_distributed = -tf.math.log(1-uniform)
     return exp_distributed
 
@@ -157,11 +197,9 @@ def gaussian_blur(img, kernel_size=11, sigma=5):
 
 
 ########################################################################################################
-
 def load_data(datadir, imsize=(18, 22), conditions='all', dim=None):
     """Load wind image data to correct size."""
     assert conditions in ['cyclone', 'all'], "Invalid conditions."
-    datas = []
     df = pd.read_csv(os.path.join(datadir, f"{dim}_dailymax.csv"), index_col=[0])
     if conditions == "cyclone":
         df = df[df['cyclone_flag']]
@@ -176,37 +214,25 @@ def load_data(datadir, imsize=(18, 22), conditions='all', dim=None):
     return data.numpy(), cyclone_flag
 
 
-def load_marginals(datadir, train_size=200, imsize=(18, 22), conditions="all", shuffle=False, paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
-    """Load wind data, split into train and test and converted to marginals based-on the train set."""
-    assert conditions in ['cyclone', 'all'], "Invalid conditions."
-    h, w = imsize
-    winds, cyclone_flag = load_winds(datadir, imsize, conditions)
-    n = winds.shape[0]
-    assert n > train_size, "Train size ({train_size}) > dataset size ({n})."
-    
-    if shuffle: 
-        index = [*range(n)]
-        np.random.seed(42)  # will always create same dataset
-        np.random.shuffle(index)
-        winds = winds[index]
-        cyclone_flag = cyclone_flag[index]
-    
-    train, test = winds[:train_size, ...], winds[train_size:, ...]
-    quantiles = train.copy()
-    train = transform_to_marginals(train)
-    test = transform_to_marginals(test)
-    train = tf.pad(train, paddings)
-    test = tf.pad(test, paddings)
-    return train, test, quantiles, cyclone_flag
+def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'wave_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
+    marginals = []
+    quantiles = []
+    params = []
+    for data in datas:
+        marginals.append(np.load(os.path.join(datadir, data, 'train', 'marginals.npy'))[..., 0])
+        quantiles.append(np.load(os.path.join(datadir, data, 'train', 'quantiles.npy')))
+        params.append(np.load(os.path.join(datadir, data, 'train', 'params.npy')))
 
+    marginals = np.stack(marginals, axis=-1)
+    quantiles = np.stack(quantiles, axis=-1)
+    params = np.stack(params, axis=-1)
+    marginals = tf.pad(marginals, paddings)
 
-def cyclone_transfer_set(train, test, cyclone_flag, train_size):
-    """Create a cyclone-only training set for transfer learning."""
-    ncyclones = sum(cyclone_flag) // 2
-    cyclone_train = train[cyclone_flag[:train_size]]
-    cyclone_test = test[cyclone_flag[train_size:]]
+    # train/valid split
+    np.random.seed(2)
+    train_inds = np.random.randint(0, marginals.shape[0], train_size)
 
-    more_train = cyclone_test[:ncyclones - cyclone_train.shape[0]]
-    cyclone_test = cyclone_test[ncyclones - cyclone_train.shape[0]:]
-    cyclone_train = tf.concat([cyclone_train, more_train], axis=0)
-    return cyclone_train, cyclone_test
+    marginals_train = np.take(marginals, train_inds, axis=0)
+    marginals_test = np.delete(marginals, train_inds, axis=0)
+    return marginals_train, marginals_test, quantiles, params
+

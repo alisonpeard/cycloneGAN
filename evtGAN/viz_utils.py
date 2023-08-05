@@ -2,6 +2,7 @@ import os
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
+from scipy.stats import gaussian_kde
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 # import geopandas as gpd
 
@@ -68,14 +69,17 @@ def scatter_density(x, y, ax, title=''):
     return ax
 
 
-def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0):
+def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, params=None, thresh=None, channel=0):
     """Assumes data provided as marginals unless params are provided"""
-    corrs = {'low': (351, 340), 'medium': (332, 335), 'high': (75, 119)}
-    fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
+    if channel == 1:
+        corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (232, 276)}
+    elif channel == 0:
+        corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (332, 311)}
 
-    train_quantiles = tf_utils.transform_to_quantiles(train_marginals, quantiles)
-    test_quantiles = tf_utils.transform_to_quantiles(test_marginals, quantiles)
-    fake_quantiles = tf_utils.transform_to_quantiles(fake_marginals, quantiles)
+    fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
+    train_quantiles = transform_to_quantiles(train_marginals, quantiles, params, thresh)
+    test_quantiles = transform_to_quantiles(test_marginals, quantiles, params, thresh)
+    fake_quantiles = transform_to_quantiles(fake_marginals, quantiles, params, thresh)
 
     for i, sample_pixels in enumerate([*corrs.values()]):
         ax = axs[i, :]
@@ -83,54 +87,51 @@ def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles,
         plot_sample_density(test_quantiles[..., channel], ax[1], sample_pixels=sample_pixels)
         plot_sample_density(fake_quantiles[..., channel], ax[2], sample_pixels=sample_pixels)
 
-        ec = get_ecs(train_images[..., channel], sample_pixels, params=params_train)[0]
+        ec = get_ecs(train_marginals[..., channel], sample_pixels)[0]
         ax[0].set_title(f'$\chi$: {ec:.4f}')
-        ec = get_ecs(test_images[..., channel], sample_pixels, params=params_test)[0]
+        ec = get_ecs(test_marginals[..., channel], sample_pixels)[0]
         ax[1].set_title(f'$\chi$: {ec:.4f}')
-        ec = get_ecs(fake_data[..., channel], sample_pixels, params=params_train)[0]
+        ec = get_ecs(fake_marginals[..., channel], sample_pixels)[0]
         ax[2].set_title(f'$\chi$: {ec:.4f}')
 
     for axi in axs:
         for ax in axi:
-            if params_train is not None:
-                ax.set_xlabel(r'wind speed (ms$^{-1}$)')
-                ax.set_ylabel(r'wind speed (ms$^{-1}$)')
-            else:
-                ax.set_xlabel(r'wind speed marginal')
-                ax.set_ylabel(r'wind speed marginal')
+            ax.set_xlabel(r'wind speed (ms$^{-1}$)')
+            ax.set_ylabel(r'wind speed (ms$^{-1}$)')
 
     fig.suptitle(f'Correlations: dimension {channel}')
     return fig
 
 
 def compare_channels_plot(train_images, test_images, fake_data):
-    for i in [300, 201, 53]:
-        fig, ax = plt.subplots(1, 3, figsize=(15, 3))
+    fig, axs = plt.subplots(3, 3, figsize=(15, 3))
+
+    for i, j in enumerate([300, 201, 102]):
 
         n, h, w, c = train_images.shape
         data_ravel = tf.reshape(train_images, [n, h * w, c])
-        data_sample = tf.gather(data_ravel, i, axis=1).numpy()
+        data_sample = tf.gather(data_ravel, j, axis=1).numpy()
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
-        scatter_density(x, y, ax=ax[0])
+        scatter_density(x, y, ax=axs[i, 0])
 
         n, h, w, c = test_images.shape
         data_ravel = tf.reshape(test_images, [n, h * w, c])
-        data_sample = tf.gather(data_ravel, i, axis=1).numpy()
+        data_sample = tf.gather(data_ravel, j, axis=1).numpy()
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
-        scatter_density(x, y, ax=ax[1])
+        scatter_density(x, y, ax=axs[i, 1])
 
         n, h, w, c = fake_data.shape
         data_ravel = tf.reshape(fake_data, [n, h * w, c])
-        data_sample = tf.gather(data_ravel, i, axis=1).numpy()
+        data_sample = tf.gather(data_ravel, j, axis=1).numpy()
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
-        scatter_density(x, y, ax=ax[2])
+        scatter_density(x, y, ax=axs[i, 2])
 
-        for a in ax:
-            a.set_xlabel('u10')
-            a.set_ylabel('v10')
+        for ax in axs.ravel():
+            ax.set_xlabel('u10')
+            ax.set_ylabel('v10')
     return fig
 
 
