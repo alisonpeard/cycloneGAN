@@ -161,3 +161,5 @@ cython_debug/
 
 # ignore wandb folder
 wandb/
+saved-models/
+.DS_Store

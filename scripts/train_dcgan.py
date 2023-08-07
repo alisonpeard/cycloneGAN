@@ -38,7 +38,8 @@ def log_image_to_wandb(fig, name:str, dir:str):
 
 def main(config):
     # load data
-    train_marginals, test_marginals, quantiles, params = tf_utils.load_marginals_and_quantiles(datadir, config.train_size, paddings=paddings)
+    train_marginals, test_marginals, quantiles, *_ = tf_utils.load_marginals_and_quantiles(datadir, config.train_size, paddings=paddings)
+    
     train = tf.data.Dataset.from_tensor_slices(train_marginals).batch(config.batch_size)
     test = tf.data.Dataset.from_tensor_slices(test_marginals).batch(config.batch_size)
 
@@ -63,6 +64,7 @@ def main(config):
     fake_marginals = gan(1000)
     fake_marginals = tf_utils.tf_unpad(fake_marginals, paddings)
     fake_marginals = fake_marginals.numpy()
+
 
     fig = viz_utils.plot_generated_marginals(fake_marginals)
     log_image_to_wandb(fig, f'generated_marginals', imdir)

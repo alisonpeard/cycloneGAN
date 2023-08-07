@@ -8,19 +8,23 @@ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
 from .tf_utils import *
 
-def plot_generated_marginals(fake_data, start=0, channel=0):
+def plot_generated_marginals(fake_data, start=0):
     print(f"Range: [{fake_data.min():.2f}, {fake_data.max():.2f}]")
 
     nrows = 10
-    fig, axs = plt.subplots(2, nrows, layout='tight', figsize=(10, 3))
+    fig, axs = plt.subplots(3, nrows, layout='tight', figsize=(10, 3))
 
     for i, ax in enumerate(axs.ravel()[:nrows]):
         im = ax.imshow(fake_data[start + i, ..., 0], cmap='YlOrRd', vmin=0, vmax=1)
-    axs[0, 0].set_ylabel('u10')
+    axs[0, 0].set_ylabel('wind')
 
-    for i, ax in enumerate(axs.ravel()[nrows:]):
+    for i, ax in enumerate(axs.ravel()[nrows: 2 * nrows]):
         im = ax.imshow(fake_data[start + i, ..., 1], cmap='YlOrRd', vmin=0, vmax=1)
-    axs[1, 0].set_ylabel('v10')
+    axs[1, 0].set_ylabel('wave')
+
+    for i, ax in enumerate(axs.ravel()[2 * nrows:]):
+        im = ax.imshow(fake_data[start + i, ..., 2], cmap='YlOrRd', vmin=0, vmax=1)
+    axs[1, 0].set_ylabel('precipitation')
 
     for ax in axs.ravel():
         ax.set_xticks([])

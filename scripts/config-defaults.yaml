@@ -1,6 +1,6 @@
 # training settings
 nepochs:
-  value: 200 # 2000 # 7500
+  value: 200 # 7500
 train_size:
   value: 200
 batch_size:
@@ -10,6 +10,9 @@ chi_frequency:
   value: 5
 seed:
   value: 2
+# gumbel_transform:
+#   desc: train on uniform(ish) distribution or on gumbel margins
+#   value: True
 
 # training features
 lambda_:
@@ -31,6 +34,12 @@ latent_dims:
 g_layers:
   desc: Number of channels in the hidden layers for the generator.
   value: [25600, 512, 256]
+complexity_0:
+  value: 1
+complexity_1:
+  value: 1
+complexity_2:
+  value: 1
 d_layers:
   desc: Number of channels in the hidden layers for the discriminator.
   value: [64, 128, 256]

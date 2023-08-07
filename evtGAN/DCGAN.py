@@ -46,26 +46,27 @@ def define_generator(config, nchannels=2):
     z = tf.keras.Input(shape=(100))
 
     # First fully connected layer, 1 x 1 x 25600 -> 5 x 5 x 1024
-    fc = layers.Dense(config.g_layers[0])(z)
-    fc = layers.Reshape((5, 5, int(config.g_layers[0] / 25)))(fc)
+    fc = layers.Dense(config['complexity_0'] * config['g_layers'][0])(z)
+    fc = layers.Reshape((5, 5, int(config['complexity_0'] * config['g_layers'][0] / 25)))(fc)
     fc = layers.BatchNormalization(axis=-1)(fc)  # normalise along features layer (1024)
     lrelu0 = layers.LeakyReLU(config.lrelu)(fc)
     drop0 = layers.Dropout(config.dropout)(lrelu0)
 
     # Deconvolution, 7 x 7 x 512
-    conv1 = layers.Conv2DTranspose(config.g_layers[1], (3, 3), (1, 1), use_bias=False)(drop0)
+    conv1 = layers.Conv2DTranspose(config['complexity_1'] * config['g_layers'][1], (3, 3), (1, 1), use_bias=False)(drop0)
     conv1 = layers.BatchNormalization(axis=-1)(conv1)
     lrelu1 = layers.LeakyReLU(config.lrelu)(conv1)
     drop1 = layers.Dropout(config.dropout)(lrelu1)
 
     # Deconvolution, 9 x 10 x 256
-    conv2 = layers.Conv2DTranspose(config.g_layers[2], (3, 4), (1, 1), use_bias=False)(drop1)
+    conv2 = layers.Conv2DTranspose(config['complexity_2'] * config['g_layers'][2], (3, 4), (1, 1), use_bias=False)(drop1)
     conv2 = layers.BatchNormalization(axis=-1)(conv2)
     lrelu2 = layers.LeakyReLU(config.lrelu)(conv2)
     drop2 = layers.Dropout(config.dropout)(lrelu2)
 
     # Output layer, 20 x 24 x nchannels
     logits = layers.Conv2DTranspose(nchannels, (4, 6), (2, 2))(drop2)
+
     o = tf.keras.activations.sigmoid(logits)  # not done in original code but doesn't make sense not to
 
     return tf.keras.Model(z, o, name='generator')
@@ -79,24 +80,24 @@ def define_discriminator(config, nchannels=2):
     x = tf.keras.Input(shape=(20, 24, nchannels))
 
     # 1st hidden layer 9x10x64
-    conv1 = layers.Conv2D(config.d_layers[0], (4,5), (2,2), 'valid', kernel_initializer=tf.keras.initializers.GlorotUniform())(x)
+    conv1 = layers.Conv2D(config['d_layers'][0], (4,5), (2,2), 'valid', kernel_initializer=tf.keras.initializers.GlorotUniform())(x)
     lrelu1 = layers.LeakyReLU(config.lrelu)(conv1)
     drop1 = layers.Dropout(config.dropout)(lrelu1)
 
     # 2nd hidden layer 7x7x128
-    conv1 = layers.Conv2D(config.d_layers[1], (3,4), (1,1), 'valid', use_bias=False)(drop1)
+    conv1 = layers.Conv2D(config['d_layers'][1], (3,4), (1,1), 'valid', use_bias=False)(drop1)
     conv1 = layers.BatchNormalization(axis=-1)(conv1)
     lrelu2 = layers.LeakyReLU(config.lrelu)(conv1)
     drop2 = layers.Dropout(config.dropout)(lrelu2)
 
     # 3rd hidden layer 5x5x256
-    conv2 = layers.Conv2D(config.d_layers[2], (3,3), (1,1), 'valid', use_bias=False)(drop2)
+    conv2 = layers.Conv2D(config['d_layers'][2], (3,3), (1,1), 'valid', use_bias=False)(drop2)
     conv2 = layers.BatchNormalization(axis=-1)(conv2)
     lrelu3 = layers.LeakyReLU(config.lrelu)(conv2)
     drop3 = layers.Dropout(config.dropout)(lrelu3)
 
     # fully connected 1x1
-    flat = layers.Reshape((-1, 5 * 5 * config.d_layers[2]))(drop3)
+    flat = layers.Reshape((-1, 5 * 5 * config['d_layers'][2]))(drop3)
     logits = layers.Dense(1)(flat)
     logits = layers.Reshape((1,))(logits)
     o = tf.keras.activations.sigmoid(logits)
@@ -117,6 +118,7 @@ class DCGAN(keras.Model):
         self.d_loss_fake_tracker = keras.metrics.Mean(name="d_loss_fake")
         self.g_loss_raw_tracker = keras.metrics.Mean(name="g_loss_raw")
         self.g_penalty_tracker = keras.metrics.Mean(name="g_penalty")
+
 
     def compile(self, d_optimizer, g_optimizer, loss_fn):
         super().compile()
@@ -265,6 +267,7 @@ def get_chi_score(data, generated_data, sample_size=tf.constant(25)):
 
     >>> get_chi_score(data, generated_data, self.sample_size)
     """
+    
     _, h, w, c = tf.unstack(tf.shape(data))
     sample_inds = tf.random.uniform([sample_size], maxval=(h * w), dtype=tf.dtypes.int32)
     rmses = tf.TensorArray(tf.float32, size=c)

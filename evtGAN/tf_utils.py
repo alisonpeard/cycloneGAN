@@ -23,17 +23,24 @@ def frechet_transform(uniform):
 def gumbel_transform(uniform):
     return -np.log(-np.log(uniform))
 
+def inverse_gumbel_transform(data):
+    uniform = -tf.math.exp(-tf.math.exp(data))
+    return uniform
 
 def transform_to_marginals(dataset, thresh=.9, fit_tail=False):
     n, h, w, c = dataset.shape
     assert c == 1, "single channel only"
     dataset = dataset[..., 0].reshape(n, h * w)
+
     marginals, parameters = semiparametric_cdf(dataset, thresh, fit_tail=fit_tail)
-    quantiles = interpolate_quantiles(marginals, dataset)
+
+    # generate quantiles for inverse transform
+    for_quantiles, *_ = semiparametric_cdf(dataset, thresh, fit_tail=False)
+    quantiles = interpolate_quantiles(for_quantiles, dataset, n=100_000)
     
     marginals = marginals.reshape(n, h, w, 1)
     parameters = parameters.reshape(h, w, 3)
-    quantiles = quantiles.reshape(10000, h, w)
+    quantiles = quantiles.reshape(100_000, h, w)
     
     return marginals, parameters, quantiles
 
@@ -67,10 +74,11 @@ def semiparametric_marginal(x, thresh, fit_tail=False):
         u_x = max(x[f <= thresh])
         shape, loc, scale = genextreme.fit(x_tail)
         f_tail = 1 - (1 - thresh) * np.maximum(0, (1 - shape * (x_tail - u_x) / scale)) ** (1 / shape)
-        f[f >= thresh] = f_tail # distribution no longer uniform
-    else:
+        f[f > thresh] = f_tail # distribution no longer uniform
         f *= 1 - 1e-6
+    else:
         shape, loc, scale = 0, 0, 0
+        f *= 1 - 1e-6
     return f, shape, loc, scale
 
 
@@ -94,6 +102,7 @@ def transform_to_quantiles(marginals, data, params=None, thresh=None):
     marginals = marginals.reshape(n, h * w, c)
     data = data.reshape(len(data), h * w, c)
     if params is not None:
+        assert params.shape == (h, w, 3, c), "Marginals and parameters have different dimensions"
         params = params.reshape(h * w, 3, c)
     quantiles = []
     for channel in range(c):
@@ -108,14 +117,14 @@ def transform_to_quantiles(marginals, data, params=None, thresh=None):
 
 
 def equantile(marginals, x, params=None, thresh=None):
+    """(Semi)empirical quantile/percent/point function."""
     n = len(x)
     x = sorted(x)
     quantiles = np.array([x[int(q * n)] for q in marginals])
     if params is not None:
-        u_x = marginals[marginals <= thresh].max()
+        u_x = quantiles[marginals <= thresh].max()
         marginals_tail = marginals[marginals > thresh]
         quantiles_tail = upper_ppf(marginals_tail, u_x, thresh, params)
-        # quantiles_tail = gev_ppf(marginals_tail, params)
         quantiles[marginals > thresh] = quantiles_tail
     return quantiles
 
@@ -136,18 +145,18 @@ def gev_ppf(q, params):
 
 ####################################################
 # Tail dependence (Χ) calculations
-####################################################
-def tail_dependence_diff(data, noise, sample_size):
-    """Get mean l2-norm of tail dependence metric."""
-    n, h, w, _ = tf.shape(data)
-    sample_inds = tf.random.uniform([25], maxval=(h * w), dtype=tf.dtypes.int32)
-    generated_data = generator(noise)
+# ####################################################
+# def tail_dependence_diff(data, noise, sample_size):
+#     """Get mean l2-norm of tail dependence metric."""
+#     n, h, w, _ = tf.shape(data)
+#     sample_inds = tf.random.uniform([25], maxval=(h * w), dtype=tf.dtypes.int32)
+#     generated_data = generator(noise)
 
-    ecs_tr = get_ecs(data, sample_inds)
-    ecs_gen = get_ecs(generated_data, sample_inds)
+#     ecs_tr = get_ecs(data, sample_inds)
+#     ecs_gen = get_ecs(generated_data, sample_inds)
 
-    l2_tr = tf.math.sqrt(tf.reduce_mean((tf.stack(ecs_gen) - tf.stack(ecs_tr))**2))
-    return l2_tr
+#     l2_tr = tf.math.sqrt(tf.reduce_mean((tf.stack(ecs_gen) - tf.stack(ecs_tr))**2))
+#     return l2_tr
 
 
 def get_ecs(marginals, sample_inds):
@@ -223,18 +232,27 @@ def load_data(datadir, imsize=(18, 22), conditions='all', dim=None):
     return data.numpy(), cyclone_flag
 
 
-def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
+def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]]), gumbel=False):
     marginals = []
     quantiles = []
+    images = []
     params = []
     for data in datas:
         marginals.append(np.load(os.path.join(datadir, data, 'train', 'marginals.npy'))[..., 0])
         quantiles.append(np.load(os.path.join(datadir, data, 'train', 'quantiles.npy')))
         params.append(np.load(os.path.join(datadir, data, 'train', 'params.npy')))
+        images.append(np.load(os.path.join(datadir, data, 'train', 'images.npy')))
 
     marginals = np.stack(marginals, axis=-1)
     quantiles = np.stack(quantiles, axis=-1)
     params = np.stack(params, axis=-1)
+    images = np.stack(images, axis=-1)
+
+    # gumbel transform
+    if gumbel:
+        marginals = gumbel_transform(marginals)
+
+    # paddings
     marginals = tf.pad(marginals, paddings)
 
     # train/valid split
@@ -243,5 +261,5 @@ def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'w
 
     marginals_train = np.take(marginals, train_inds, axis=0)
     marginals_test = np.delete(marginals, train_inds, axis=0)
-    return marginals_train, marginals_test, quantiles, params
+    return marginals_train, marginals_test, quantiles, params, images
 
