@@ -6,6 +6,7 @@ Note, requires config to create new model too.
 """
 
 import os
+import yaml
 import numpy as np
 from datetime import datetime
 import tensorflow as tf
@@ -36,6 +37,13 @@ def log_image_to_wandb(fig, name:str, dir:str):
     wandb.log({name: wandb.Image(impath)})
 
 
+def save_config(dir):
+    configfile = open(os.path.join(dir, "config-defaults.yaml"), "w")
+    configdict = {key: {"value": value} for key, value in wandb.config.as_dict().items()}
+    yaml.dump(configdict, configfile, default_flow_style=None)
+    configfile.close()
+
+
 def main(config):
     # load data
     train_marginals, test_marginals, quantiles, *_ = tf_utils.load_marginals_and_quantiles(datadir, config.train_size, paddings=paddings)
@@ -54,8 +62,10 @@ def main(config):
         # gan.discriminator.load_weights("/Users/alison/Documents/DPhil/multivariate/saved_models/lilac-pine-10_discriminator_weights")
         gan.fit(train, epochs=config.nepochs, callbacks=[WandbCallback(), chi_score, cross_entropy])
 
+    # reproducibility
     gan.generator.save_weights(os.path.join(rundir, f'generator_weights'))
     gan.discriminator.save_weights(os.path.join(rundir, f'discriminator_weights'))
+    save_config(rundir)
 
     # generate 1000 images to visualise some results
     train_marginals = tf_utils.tf_unpad(train_marginals, paddings).numpy()

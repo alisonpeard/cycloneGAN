@@ -4,6 +4,7 @@ import random
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import warnings
 from scipy.stats import ecdf, genextreme
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
@@ -120,9 +121,16 @@ def equantile(marginals, x, params=None, thresh=None):
     """(Semi)empirical quantile/percent/point function."""
     n = len(x)
     x = sorted(x)
+    if marginals.max() >= 1:
+        warnings.warn("Some marginals >= 1.")
+        marginals *= 1 - 1e-6
     quantiles = np.array([x[int(q * n)] for q in marginals])
     if params is not None:
-        u_x = quantiles[marginals <= thresh].max()
+        if len(quantiles[marginals <= thresh]) > 0:
+            u_x = quantiles[marginals <= thresh].max()
+        else:  # just a catch for mad marginals, but shouldn't happen
+            warnings.warn("All marginals above u_x.")
+            u_x = quantiles.min()
         marginals_tail = marginals[marginals > thresh]
         quantiles_tail = upper_ppf(marginals_tail, u_x, thresh, params)
         quantiles[marginals > thresh] = quantiles_tail
@@ -232,7 +240,7 @@ def load_data(datadir, imsize=(18, 22), conditions='all', dim=None):
     return data.numpy(), cyclone_flag
 
 
-def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]]), gumbel=False):
+def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
     marginals = []
     quantiles = []
     images = []
@@ -241,16 +249,12 @@ def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'w
         marginals.append(np.load(os.path.join(datadir, data, 'train', 'marginals.npy'))[..., 0])
         quantiles.append(np.load(os.path.join(datadir, data, 'train', 'quantiles.npy')))
         params.append(np.load(os.path.join(datadir, data, 'train', 'params.npy')))
-        images.append(np.load(os.path.join(datadir, data, 'train', 'images.npy')))
+        images.append(np.load(os.path.join(datadir, data, 'train', 'images.npy'))[..., 0])
 
     marginals = np.stack(marginals, axis=-1)
     quantiles = np.stack(quantiles, axis=-1)
     params = np.stack(params, axis=-1)
     images = np.stack(images, axis=-1)
-
-    # gumbel transform
-    if gumbel:
-        marginals = gumbel_transform(marginals)
 
     # paddings
     marginals = tf.pad(marginals, paddings)

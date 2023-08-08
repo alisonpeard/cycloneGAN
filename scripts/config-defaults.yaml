@@ -1,6 +1,6 @@
 # training settings
 nepochs:
-  value: 200 # 7500
+  value: 1000 # 7500
 train_size:
   value: 200
 batch_size:
@@ -9,14 +9,11 @@ chi_frequency:
   desc: How often to calculate chi-score for train and test.
   value: 5
 seed:
-  value: 2
-# gumbel_transform:
-#   desc: train on uniform(ish) distribution or on gumbel margins
-#   value: True
+  value: 42
 
 # training features
 lambda_:
-  value: 0.1
+  value: 0.07576388329158146
 training_balance:
   desc: How many more times to train discriminator than generator.
   value: 2
@@ -26,20 +23,20 @@ true_label_smooth:
 
 # architecture
 lrelu:
-  value: 0.308623096408301
+  value: 0.2273331764715421
 dropout:
-  value: 0.17212992990721143
+  value: 0.31171397869721307
 latent_dims:
   value: 100
 g_layers:
   desc: Number of channels in the hidden layers for the generator.
   value: [25600, 512, 256]
 complexity_0:
-  value: 1
+  value: 2
 complexity_1:
   value: 1
 complexity_2:
-  value: 1
+  value: 2
 d_layers:
   desc: Number of channels in the hidden layers for the discriminator.
   value: [64, 128, 256]
@@ -47,9 +44,9 @@ d_layers:
 
 # Adam parameters
 learning_rate:
-  value: 0.00033311627536622494
+  value: 0.0001297870011941956
 beta_1:
-  value: 0.5968270381256018
+  value: 0.0001297870011941956
 beta_2:
   value: 0.999
 clipnorm:
