@@ -1,6 +1,6 @@
 program: train_dcgan.py
-name: wind_wave_rain_fixed_marginals
-method: random
+name: August1523_1100
+method: bayes
 project: evtGAN
 metric:
   name: g_loss_raw
@@ -13,23 +13,17 @@ parameters:
     max: 0.2
   learning_rate:
     min: 0.0001
-    max: 0.0005
+    max: 0.0003
   beta_1:
     min: 0.1
-    max: 0.9
-  train_size:
-    values: [100, 200, 400]
+    max: 0.5
   lrelu:
     min: 0.1
-    max: 0.5
+    max: 0.4
   dropout:
-    min: 0.1
-    max: 0.5
-  complexity_0:
-    values: [1, 2]
-  complexity_1:
-    values: [1, 2]
-  complexity_2:
+    min: 0.3
+    max: 0.6
+  training_balance:
     values: [1, 2]
 run_cap: 50
 

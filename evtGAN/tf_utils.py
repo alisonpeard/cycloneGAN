@@ -11,7 +11,7 @@ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
 SEED = 42
 
-def tf_unpad(tensor, paddings):
+def tf_unpad(tensor, paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
     """Mine: remove Tensor paddings"""
     tensor = tf.convert_to_tensor(tensor)  # incase its a np.array
     unpaddings = [slice(pad.numpy()[0], -pad.numpy()[1]) if sum(pad.numpy()>0)  else slice(None, None) for pad in paddings]
@@ -64,7 +64,7 @@ def semiparametric_marginal(x, thresh, fit_tail=False):
     """Heffernan & Tawn (2004). 
     
     Note shape parameter is opposite sign to H&T (2004)."""
-    if all(x == 0.):
+    if (x.max() - x.min()) == 0.:
         return np.array([0.] * len(x)), 0, 0, 0
     
     f = ecdf(x).cdf.evaluate(x)
@@ -121,6 +121,10 @@ def equantile(marginals, x, params=None, thresh=None):
     """(Semi)empirical quantile/percent/point function."""
     n = len(x)
     x = sorted(x)
+
+    if (marginals.max() - marginals.min()) == 0.: # all identical pixels
+        return np.array([-999] * len(marginals))
+
     if marginals.max() >= 1:
         warnings.warn("Some marginals >= 1.")
         marginals *= 1 - 1e-6
@@ -150,21 +154,6 @@ def gev_ppf(q, params):
         return genextreme.ppf(q, *params)
     else:
         return 0.
-
-####################################################
-# Tail dependence (Χ) calculations
-# ####################################################
-# def tail_dependence_diff(data, noise, sample_size):
-#     """Get mean l2-norm of tail dependence metric."""
-#     n, h, w, _ = tf.shape(data)
-#     sample_inds = tf.random.uniform([25], maxval=(h * w), dtype=tf.dtypes.int32)
-#     generated_data = generator(noise)
-
-#     ecs_tr = get_ecs(data, sample_inds)
-#     ecs_gen = get_ecs(generated_data, sample_inds)
-
-#     l2_tr = tf.math.sqrt(tf.reduce_mean((tf.stack(ecs_gen) - tf.stack(ecs_tr))**2))
-#     return l2_tr
 
 
 def get_ecs(marginals, sample_inds):

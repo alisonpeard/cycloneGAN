@@ -3,10 +3,21 @@ import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
+import matplotlib as mpl
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 # import geopandas as gpd
 
 from .tf_utils import *
+
+def discrete_colormap(data, nintervals, min=None, cmap="cividis", under='dimgrey'):
+    cmap = getattr(mpl.cm, cmap)
+    if min is not None:
+        data = data[data >= min]
+    bounds = np.quantile(data.ravel(), np.linspace(0, 1, nintervals))
+    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+    cmap.set_under(under)
+    return cmap, norm
+
 
 def plot_generated_marginals(fake_data, start=0):
     print(f"Range: [{fake_data.min():.2f}, {fake_data.max():.2f}]")
@@ -38,7 +49,7 @@ def plot_generated_marginals(fake_data, start=0):
     return fig
 
 
-def plot_sample_density(data, ax, sample_pixels=None):
+def plot_sample_density(data, ax, sample_pixels=None, cmap='cividis'):
     """For generated quantiles."""
     h, w = data.shape[1:3]
     n = h * w
@@ -60,20 +71,20 @@ def plot_sample_density(data, ax, sample_pixels=None):
     # frechet_y = -tf.math.log(1 - sample_y)
     # ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
     axtitle = f"Pixels ({sample_pixels_x[0]}, {sample_pixels_y[0]})"
-    scatter_density(sample_x.numpy(), sample_y.numpy(), ax, title=axtitle)
+    scatter_density(sample_x.numpy(), sample_y.numpy(), ax, title=axtitle, cmap=cmap)
 
 
-def scatter_density(x, y, ax, title=''):
+def scatter_density(x, y, ax, title='', cmap='cividis'):
     xy = np.hstack([x, y]).transpose()
     z = gaussian_kde(xy)(xy)
     idx = z.argsort()
     x, y, z = x[idx], y[idx], z[idx]
-    ax.scatter(x, y, c=z, s=10)
+    ax.scatter(x, y, c=z, s=10, cmap=cmap)
     ax.set_title(title)
     return ax
 
 
-def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, params=None, thresh=None, channel=0):
+def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, params=None, thresh=None, channel=0, u_x=None, cmap='cividis'):
     """Assumes data provided as marginals unless params are provided"""
     if channel == 1:
         corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (232, 276)}
@@ -85,11 +96,15 @@ def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles,
     test_quantiles = transform_to_quantiles(test_marginals, quantiles, params, thresh)
     fake_quantiles = transform_to_quantiles(fake_marginals, quantiles, params, thresh)
 
+    if u_x is not None:
+        h, w, c = u_x.shape
+        u_x = u_x.reshape(h * w, c)
+
     for i, sample_pixels in enumerate([*corrs.values()]):
         ax = axs[i, :]
-        plot_sample_density(train_quantiles[..., channel], ax[0], sample_pixels=sample_pixels)
-        plot_sample_density(test_quantiles[..., channel], ax[1], sample_pixels=sample_pixels)
-        plot_sample_density(fake_quantiles[..., channel], ax[2], sample_pixels=sample_pixels)
+        plot_sample_density(train_quantiles[..., channel], ax[0], sample_pixels=sample_pixels, cmap=cmap)
+        plot_sample_density(test_quantiles[..., channel], ax[1], sample_pixels=sample_pixels, cmap=cmap)
+        plot_sample_density(fake_quantiles[..., channel], ax[2], sample_pixels=sample_pixels, cmap=cmap)
 
         ec = get_ecs(train_marginals[..., channel], sample_pixels)[0]
         ax[0].set_title(f'$\chi$: {ec:.4f}')
@@ -98,16 +113,22 @@ def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles,
         ec = get_ecs(fake_marginals[..., channel], sample_pixels)[0]
         ax[2].set_title(f'$\chi$: {ec:.4f}')
 
-    for axi in axs:
-        for ax in axi:
-            ax.set_xlabel(r'wind speed (ms$^{-1}$)')
-            ax.set_ylabel(r'wind speed (ms$^{-1}$)')
+        if u_x is not None:
+            u = (u_x[sample_pixels[0], channel], u_x[sample_pixels[1], channel])
 
+            for a in ax:
+                a.axhline(u[0], linestyle='dashed', color='k')
+                a.axvline(u[1], linestyle='dashed', color='k')
+
+    for ax in axs.ravel():
+        ax.set_xlabel(r'wind speed (ms$^{-1}$)')
+        ax.set_ylabel(r'wind speed (ms$^{-1}$)')
+            
     fig.suptitle(f'Correlations: dimension {channel}')
     return fig
 
 
-def compare_channels_plot(train_images, test_images, fake_data):
+def compare_channels_plot(train_images, test_images, fake_data, cmap='cividis'):
     fig, axs = plt.subplots(3, 3, figsize=(15, 3))
 
     for i, j in enumerate([300, 201, 102]):
@@ -117,21 +138,21 @@ def compare_channels_plot(train_images, test_images, fake_data):
         data_sample = tf.gather(data_ravel, j, axis=1).numpy()
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
-        scatter_density(x, y, ax=axs[i, 0])
+        scatter_density(x, y, ax=axs[i, 0], cmap=cmap)
 
         n, h, w, c = test_images.shape
         data_ravel = tf.reshape(test_images, [n, h * w, c])
         data_sample = tf.gather(data_ravel, j, axis=1).numpy()
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
-        scatter_density(x, y, ax=axs[i, 1])
+        scatter_density(x, y, ax=axs[i, 1], cmap=cmap)
 
         n, h, w, c = fake_data.shape
         data_ravel = tf.reshape(fake_data, [n, h * w, c])
         data_sample = tf.gather(data_ravel, j, axis=1).numpy()
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
-        scatter_density(x, y, ax=axs[i, 2])
+        scatter_density(x, y, ax=axs[i, 2], cmap=cmap)
 
         for ax in axs.ravel():
             ax.set_xlabel('u10')

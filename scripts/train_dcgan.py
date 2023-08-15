@@ -40,7 +40,7 @@ def log_image_to_wandb(fig, name:str, dir:str):
 def save_config(dir):
     configfile = open(os.path.join(dir, "config-defaults.yaml"), "w")
     configdict = {key: {"value": value} for key, value in wandb.config.as_dict().items()}
-    yaml.dump(configdict, configfile, default_flow_style=None)
+    yaml.dump(configdict, configfile)
     configfile.close()
 
 
@@ -58,8 +58,8 @@ def main(config):
     # compile
     with tf.device('/gpu:0'):
         gan = compile_dcgan(config, nchannels=3)
-        # gan.generator.load_weights("/Users/alison/Documents/DPhil/multivariate/saved_models/lilac-pine-10_generator_weights")
-        # gan.discriminator.load_weights("/Users/alison/Documents/DPhil/multivariate/saved_models/lilac-pine-10_discriminator_weights")
+        # gan.generator.load_weights("/Users/alison/Documents/DPhil/multivariate/cycloneGAN/saved-models/deft-sweep-7/generator_weights")
+        # gan.discriminator.load_weights("/Users/alison/Documents/DPhil/multivariate/cycloneGAN/saved-models/deft-sweep-7/discriminator_weights")
         gan.fit(train, epochs=config.nepochs, callbacks=[WandbCallback(), chi_score, cross_entropy])
 
     # reproducibility
@@ -74,7 +74,6 @@ def main(config):
     fake_marginals = gan(1000)
     fake_marginals = tf_utils.tf_unpad(fake_marginals, paddings)
     fake_marginals = fake_marginals.numpy()
-
 
     fig = viz_utils.plot_generated_marginals(fake_marginals)
     log_image_to_wandb(fig, f'generated_marginals', imdir)
