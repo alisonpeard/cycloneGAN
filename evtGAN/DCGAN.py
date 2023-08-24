@@ -288,7 +288,7 @@ def chi(data, sample_inds):
     data = tf.reshape(data, [n, h * w])
     data = tf.gather(data, sample_inds, axis=1)
     data = data * tf.constant(.999)  # can't have 1s in exponential quantile function
-    exp = inv_exp(data)
+    exp = inv_unit_frechet(data)
 
     chis = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
     counter = tf.constant(0)
@@ -307,6 +307,13 @@ def inv_exp(uniform):
     tf.debugging.Assert(tf.reduce_all(uniform < 1), ['Cannot perform inverse exponential when tensor contains values exceeding 1.'])
     exp_distributed = -tf.math.log(1 - uniform)
     return exp_distributed
+
+
+def inv_unit_frechet(uniform):
+    """Inverse of unit Fréchet quantile function."""
+    tf.debugging.Assert(tf.reduce_all(uniform < 1), ['Cannot perform inverse frechet when tensor contains values exceeding 1.'])
+    inv_frechet_distributed = 1 / (-tf.math.log(uniform))
+    return inv_frechet_distributed
 
 
 def chi_ij(exp_x, exp_y):
