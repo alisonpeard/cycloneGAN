@@ -5,11 +5,13 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import warnings
-from scipy.stats import ecdf, genextreme
+from scipy.stats import ecdf, genextreme, genpareto
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
+
 SEED = 42
+
 
 def tf_unpad(tensor, paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
     """Mine: remove Tensor paddings"""
@@ -17,28 +19,35 @@ def tf_unpad(tensor, paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
     unpaddings = [slice(pad.numpy()[0], -pad.numpy()[1]) if sum(pad.numpy()>0)  else slice(None, None) for pad in paddings]
     return tensor[unpaddings]
 
+
 def frechet_transform(uniform):
     """Apply to Tensor transformed to uniform using ecdf."""
     return - 1 / tf.math.log(uniform)
 
+
 def gumbel_transform(uniform):
     return -np.log(-np.log(uniform))
+
 
 def inverse_gumbel_transform(data):
     uniform = -tf.math.exp(-tf.math.exp(data))
     return uniform
 
-def transform_to_marginals(dataset, thresh=.9, fit_tail=False):
+
+def transform_to_marginals(dataset, thresholds=None, fit_tail=False):
     n, h, w, c = dataset.shape
     assert c == 1, "single channel only"
     dataset = dataset[..., 0].reshape(n, h * w)
 
-    marginals, parameters = semiparametric_cdf(dataset, thresh, fit_tail=fit_tail)
+    if fit_tail is True:
+        assert thresholds is not None, "Thresholds must be supplied if fitting tail."
+        thresholds = thresholds.reshape(h * w)
+
+    marginals, parameters = semiparametric_cdf(dataset, thresholds, fit_tail=fit_tail)
 
     # generate quantiles for inverse transform
-    for_quantiles, *_ = semiparametric_cdf(dataset, thresh, fit_tail=False)
+    for_quantiles, *_ = semiparametric_cdf(dataset)
     quantiles = interpolate_quantiles(for_quantiles, dataset, n=100_000)
-    
     marginals = marginals.reshape(n, h, w, 1)
     parameters = parameters.reshape(h, w, 3)
     quantiles = quantiles.reshape(100_000, h, w)
@@ -46,36 +55,44 @@ def transform_to_marginals(dataset, thresh=.9, fit_tail=False):
     return marginals, parameters, quantiles
 
 
-def semiparametric_cdf(dataset, thresh, fit_tail=False):
+def semiparametric_cdf(dataset, thresh=None, fit_tail=False):
     assert dataset.ndim == 2, "Requires 2 dimensions"
     x = dataset.copy()
     n, J = np.shape(x)
+
+    if not hasattr(thresh, '__len__'):
+        thresh = [thresh] * J
+    else:
+        assert len(thresh) == J, "Thresholds vector must have same length as data."
     
     shape = np.empty(J)
     loc = np.empty(J)
     scale = np.empty(J)
     for j in range(J):
-        x[:, j], shape[j], loc[j], scale[j] = semiparametric_marginal(x[:, j], thresh=thresh, fit_tail=fit_tail)
+        x[:, j], shape[j], loc[j], scale[j] = semiparametric_marginal(x[:, j], fit_tail=fit_tail, thresh=thresh[j])
     parameters = np.stack([shape, loc, scale], axis=-1)
     return x, parameters
 
 
-def semiparametric_marginal(x, thresh, fit_tail=False):
+def semiparametric_marginal(x, fit_tail=False, thresh=None):
     """Heffernan & Tawn (2004). 
     
-    Note shape parameter is opposite sign to H&T (2004)."""
+    Note shape parameter is opposite sign to Heffernan & Tawn (2004).
+    Thresh here is a value, not a percentage."""
+    
     if (x.max() - x.min()) == 0.:
         return np.array([0.] * len(x)), 0, 0, 0
     
     f = ecdf(x).cdf.evaluate(x)
     
     if fit_tail:
-        x_tail = x[f > thresh]
-        f_tail = f[f > thresh]
-        u_x = max(x[f <= thresh])
-        shape, loc, scale = genextreme.fit(x_tail)
-        f_tail = 1 - (1 - thresh) * np.maximum(0, (1 - shape * (x_tail - u_x) / scale)) ** (1 / shape)
-        f[f > thresh] = f_tail # distribution no longer uniform
+        assert thresh is not None, "Threshold must be supplied if fitting tail."
+        x_tail = x[x > thresh]
+        f_tail = f[x > thresh]
+        shape, loc, scale = genpareto.fit(x_tail, floc=thresh, method="MLE")
+        f_thresh = ecdf(x).cdf.evaluate(thresh)
+        f_tail = 1 - (1 - f_thresh) * np.maximum(0, (1 - shape * (x_tail - thresh) / scale)) ** (1 / shape)
+        f[x > thresh] = f_tail
         f *= 1 - 1e-6
     else:
         shape, loc, scale = 0, 0, 0
@@ -83,6 +100,16 @@ def semiparametric_marginal(x, thresh, fit_tail=False):
     return f, shape, loc, scale
 
 
+def fit_genpareto(vec):
+    """Fit a generalised Pareto and return the RMSE of the fit with the density histogram of the data."""
+    shape, loc, scale = genpareto.fit(vec)
+    x = np.linspace(genpareto.ppf(0.01, shape, loc, scale), genpareto.ppf(.99, shape, loc, scale), 100)
+    fitted = genpareto.pdf(x, shape, loc, scale)
+    density, *_ = plt.hist(vec, bins=x)
+    rmse = np.sqrt(sum((density - fitted)**2))
+    return shape, loc, scale, rmse
+
+    
 def interpolate_quantiles(marginals, quantiles, n=10000):
     """Interpolate the quantiles for inverse transformations."""
     assert quantiles.ndim == 2, "Requires 2 dimensions"
@@ -95,7 +122,7 @@ def interpolate_quantiles(marginals, quantiles, n=10000):
     return interpolated_quantiles
 
 
-def transform_to_quantiles(marginals, data, params=None, thresh=None):
+def transform_to_quantiles(marginals, data, params=None, f_thresh=None):
     assert marginals.ndim == 4, "Function takes rank 4 arrays"
     n, h, w, c = marginals.shape
     assert data.shape[1:] == (h, w, c), "Marginals and data have different dimensions"
@@ -110,15 +137,21 @@ def transform_to_quantiles(marginals, data, params=None, thresh=None):
         if params is None:
             q = np.array([equantile(marginals[:, j, channel], data[:, j, channel]) for j in range(h * w)]).T
         else:
-            q = np.array([equantile(marginals[:, j, channel], data[:, j, channel], params[j, ..., channel], thresh) for j in range(h * w)]).T
+            if hasattr(f_thresh, "__len__"):
+                f_thresh = f_thresh.reshape(h * w)
+            else:
+                f_thresh = [f_thresh] * (h * w)
+            q = np.array([equantile(marginals[:, j, channel], data[:, j, channel], params[j, ..., channel], f_thresh[j]) for j in range(h * w)]).T
         quantiles.append(q)
     quantiles = np.stack(quantiles, axis=-1)
     quantiles = quantiles.reshape(n, h, w, c)
     return quantiles
 
 
-def equantile(marginals, x, params=None, thresh=None):
-    """(Semi)empirical quantile/percent/point function."""
+def equantile(marginals, x, params=None, f_thresh=None):
+    """(Semi)empirical quantile/percent/point function.
+    
+    x is vector of interpolated quantiles of data (usually 100,000)"""
     n = len(x)
     x = sorted(x)
 
@@ -130,14 +163,14 @@ def equantile(marginals, x, params=None, thresh=None):
         marginals *= 1 - 1e-6
     quantiles = np.array([x[int(q * n)] for q in marginals])
     if params is not None:
-        if len(quantiles[marginals <= thresh]) > 0:
-            u_x = quantiles[marginals <= thresh].max()
+        if len(quantiles[marginals <= f_thresh]) > 0:
+            u_x = quantiles[marginals <= f_thresh].max()
         else:  # just a catch for mad marginals, but shouldn't happen
             warnings.warn("All marginals above u_x.")
             u_x = quantiles.min()
-        marginals_tail = marginals[marginals > thresh]
-        quantiles_tail = upper_ppf(marginals_tail, u_x, thresh, params)
-        quantiles[marginals > thresh] = quantiles_tail
+        marginals_tail = marginals[marginals > f_thresh]
+        quantiles_tail = upper_ppf(marginals_tail, u_x, f_thresh, params)
+        quantiles[marginals > f_thresh] = quantiles_tail
     return quantiles
 
 
@@ -151,7 +184,7 @@ def upper_ppf(marginals, u_x, thresh, params):
 def gev_ppf(q, params):
     """To replace nans with zeros."""
     if sum(params) > 0:
-        return genextreme.ppf(q, *params)
+        return genpareto.ppf(q, *params)
     else:
         return 0.
 
