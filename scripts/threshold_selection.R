@@ -8,7 +8,7 @@ getmode <- function(v) {
 }
 
 np <- import("numpy")
-var <- 'wave_data'
+var <- 'precip_data'
 
 X <- np$load(paste0("/Users/alison/Documents/DPhil/multivariate/", var, "/train/images.npy"))
 M <- dim(X)[2]
@@ -45,7 +45,7 @@ for(i in 1:M){
       u_mat[i, j] <- best_u
       n.excesses[i, j] <- length(x[x > best_u])
     }else{
-      f_mat[i, j] <- x[1]
+      f_mat[i, j] <- 0.
       u_mat[i, j] <- x[1]
     }
   }

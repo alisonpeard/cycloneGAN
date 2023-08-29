@@ -78,15 +78,15 @@ def main(config):
     fig = viz_utils.plot_generated_marginals(fake_marginals)
     log_image_to_wandb(fig, f'generated_marginals', imdir)
 
-    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0) #, params, 0.9, channel=0)
+    # get rough ecs without the tail-fitting
+    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0)
     log_image_to_wandb(fig, 'correlations_u10', imdir)
 
-    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0) #, params, 0.9, channel=1)
+    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0)
     log_image_to_wandb(fig, 'correlations_v10', imdir)
 
     fig = viz_utils.compare_channels_plot(train_marginals, test_marginals, fake_marginals)
     log_image_to_wandb(fig, 'correlations multivariate', imdir)
-    plt.show()
 
 
 if __name__ == "__main__":
