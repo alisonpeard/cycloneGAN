@@ -138,10 +138,10 @@ def transform_to_quantiles(marginals, data, params=None, f_thresh=None):
             q = np.array([equantile(marginals[:, j, channel], data[:, j, channel]) for j in range(h * w)]).T
         else:
             if hasattr(f_thresh, "__len__"):
-                f_thresh = f_thresh.reshape(h * w)
+                f_thresh = f_thresh.reshape(h * w, c)
             else:
-                f_thresh = [f_thresh] * (h * w)
-            q = np.array([equantile(marginals[:, j, channel], data[:, j, channel], params[j, ..., channel], f_thresh[j]) for j in range(h * w)]).T
+                f_thresh = [f_thresh] * (h * w, c)
+            q = np.array([equantile(marginals[:, j, channel], data[:, j, channel], params[j, ..., channel], f_thresh[j, channel]) for j in range(h * w)]).T
         quantiles.append(q)
     quantiles = np.stack(quantiles, axis=-1)
     quantiles = quantiles.reshape(n, h, w, c)
@@ -267,16 +267,23 @@ def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'w
     quantiles = []
     images = []
     params = []
+    thresholds = []
+    threshold_ecdfs = []
     for data in datas:
         marginals.append(np.load(os.path.join(datadir, data, 'train', 'marginals.npy'))[..., 0])
         quantiles.append(np.load(os.path.join(datadir, data, 'train', 'quantiles.npy')))
         params.append(np.load(os.path.join(datadir, data, 'train', 'params.npy')))
         images.append(np.load(os.path.join(datadir, data, 'train', 'images.npy'))[..., 0])
+        thresholds.append(np.load(os.path.join(datadir, data, 'train', 'thresholds.npy')))
+        threshold_ecdfs.append(np.load(os.path.join(datadir, data, 'train', 'threshold_ecdfs.npy')))
+
 
     marginals = np.stack(marginals, axis=-1)
     quantiles = np.stack(quantiles, axis=-1)
     params = np.stack(params, axis=-1)
     images = np.stack(images, axis=-1)
+    thresholds = np.stack(thresholds, axis=-1)
+    threshold_ecdfs = np.stack(threshold_ecdfs, axis=-1)
 
     # paddings
     marginals = tf.pad(marginals, paddings)
@@ -287,5 +294,5 @@ def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'w
 
     marginals_train = np.take(marginals, train_inds, axis=0)
     marginals_test = np.delete(marginals, train_inds, axis=0)
-    return marginals_train, marginals_test, quantiles, params, images
+    return marginals_train, marginals_test, quantiles, params, images, thresholds, threshold_ecdfs
 
