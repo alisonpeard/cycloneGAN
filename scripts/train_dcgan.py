@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Note, requires config to create new model too.
 >>> new_gan = DCGAN.DCGAN(config)
