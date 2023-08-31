@@ -24,9 +24,9 @@ global rundir
 plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
 
 # some static variables
-cwd = os.getcwd()
-wd = os.path.join(cwd, "..")
-datadir = "/Users/alison/Documents/DPhil/multivariate"
+cwd = os.getcwd()                                # scripts directory
+wd = os.path.join(cwd, "..")                     # cycloneGAN directory
+datadir = os.path.join(wd, "..", "multivariate") # keep data folder in parent directory 
 imdir = os.path.join(wd, 'figures', 'temp')
 paddings = tf.constant([[0,0], [1,1], [1,1], [0,0]])
 
@@ -96,5 +96,5 @@ if __name__ == "__main__":
     os.makedirs(rundir)
 
     tf.keras.utils.set_random_seed(wandb.config['seed'])  # sets seeds for base-python, numpy and tf
-    tf.config.experimental.enable_op_determinism()  # removes stochasticity from individual operations
+    tf.config.experimental.enable_op_determinism()        # removes stochasticity from individual operations
     main(wandb.config)
