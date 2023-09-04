@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import warnings
-from scipy.stats import ecdf, genextreme, genpareto
+from scipy.stats import ecdf, genpareto
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
@@ -35,6 +35,7 @@ def inverse_gumbel_transform(data):
 
 
 def transform_to_marginals(dataset, thresholds=None, fit_tail=False):
+    """Transform data to uniform distribution using ecdf."""
     n, h, w, c = dataset.shape
     assert c == 1, "single channel only"
     dataset = dataset[..., 0].reshape(n, h * w)
@@ -43,16 +44,12 @@ def transform_to_marginals(dataset, thresholds=None, fit_tail=False):
         assert thresholds is not None, "Thresholds must be supplied if fitting tail."
         thresholds = thresholds.reshape(h * w)
 
-    marginals, parameters = semiparametric_cdf(dataset, thresholds, fit_tail=fit_tail)
+    uniform, parameters = semiparametric_cdf(dataset, thresholds, fit_tail=fit_tail)
 
-    # generate quantiles for inverse transform
-    for_quantiles, *_ = semiparametric_cdf(dataset)
-    quantiles = interpolate_quantiles(for_quantiles, dataset, n=100_000)
-    marginals = marginals.reshape(n, h, w, 1)
+    uniform = uniform.reshape(n, h, w, 1)
     parameters = parameters.reshape(h, w, 3)
-    quantiles = quantiles.reshape(100_000, h, w)
     
-    return marginals, parameters, quantiles
+    return uniform, parameters
 
 
 def semiparametric_cdf(dataset, thresh=None, fit_tail=False):
@@ -83,15 +80,17 @@ def semiparametric_marginal(x, fit_tail=False, thresh=None):
     if (x.max() - x.min()) == 0.:
         return np.array([0.] * len(x)), 0, 0, 0
     
-    f = ecdf(x).cdf.evaluate(x)
+    f = ecdf(x)  # ecdf(x).cdf.evaluate(x)
     
     if fit_tail:
         assert thresh is not None, "Threshold must be supplied if fitting tail."
         x_tail = x[x > thresh]
         f_tail = f[x > thresh]
+        x_tail = x_tail.astype(np.float64)  # otherwise f_thresh gets rounded too low
         shape, loc, scale = genpareto.fit(x_tail, floc=thresh, method="MLE")
-        f_thresh = ecdf(x).cdf.evaluate(thresh)
-        f_tail = 1 - (1 - f_thresh) * np.maximum(0, (1 - shape * (x_tail - thresh) / scale)) ** (1 / shape)
+        f_thresh = np.interp(thresh, sorted(x), sorted(f)) #ecdf(x).cdf.evaluate(thresh)
+        f_tail = 1 - (1 - f_thresh) * (np.maximum(0, (1 - shape * (x_tail - thresh) / scale)) ** (1 / shape))  # second set of parenthesis important
+        assert min(f_tail) >= f_thresh, "Error in upper tail calculation."
         f[x > thresh] = f_tail
         f *= 1 - 1e-6
     else:
@@ -100,18 +99,35 @@ def semiparametric_marginal(x, fit_tail=False, thresh=None):
     return f, shape, loc, scale
 
 
-def fit_genpareto(vec):
-    """Fit a generalised Pareto and return the RMSE of the fit with the density histogram of the data."""
-    shape, loc, scale = genpareto.fit(vec)
-    x = np.linspace(genpareto.ppf(0.01, shape, loc, scale), genpareto.ppf(.99, shape, loc, scale), 100)
-    fitted = genpareto.pdf(x, shape, loc, scale)
-    density, *_ = plt.hist(vec, bins=x)
-    rmse = np.sqrt(sum((density - fitted)**2))
-    return shape, loc, scale, rmse
+def rank(x):
+    if x.std() == 0:
+        ranked = np.array([len(x) / 2 + 0.5] * len(x))
+    else:
+        temp = x.argsort()
+        ranks = np.empty_like(temp)
+        ranks[temp] = np.arange(len(x))
+        ranked = ranks + 1
+    return ranked
+
+
+def ecdf(x):
+    return rank(x) / (len(x) + 1)
+
+
+# def fit_genpareto(vec):
+#     """Fit a generalised Pareto and return the RMSE of the fit with the density histogram of the data."""
+#     shape, loc, scale = genpareto.fit(vec)
+#     x = np.linspace(genpareto.ppf(0.01, shape, loc, scale), genpareto.ppf(.99, shape, loc, scale), 100)
+#     fitted = genpareto.pdf(x, shape, loc, scale)
+#     density, *_ = plt.hist(vec, bins=x)
+#     rmse = np.sqrt(sum((density - fitted)**2))
+#     return shape, loc, scale, rmse
 
     
 def interpolate_quantiles(marginals, quantiles, n=10000):
-    """Interpolate the quantiles for inverse transformations."""
+    """Interpolate the quantiles for inverse transformations.
+    
+    No longer using this."""
     assert quantiles.ndim == 2, "Requires 2 dimensions"
     interpolation_points = np.linspace(0, 1, n)
     J = np.shape(quantiles)[1]
@@ -122,36 +138,45 @@ def interpolate_quantiles(marginals, quantiles, n=10000):
     return interpolated_quantiles
 
 
-def transform_to_quantiles(marginals, data, params=None, f_thresh=None):
+def transform_to_quantiles(marginals, x, y, params=None, thresh=None):
+    """Transform uniform marginals to original distributions, by inverse-interpolating ecdf."""
     assert marginals.ndim == 4, "Function takes rank 4 arrays"
     n, h, w, c = marginals.shape
-    assert data.shape[1:] == (h, w, c), "Marginals and data have different dimensions"
+    assert x.shape[1:] == (h, w, c), "Marginals and x have different dimensions."
+    assert y.shape[1:] == (h, w, c), "Marginals and y have different dimensions."
+    assert x.shape[0] == y.shape[0], "x and y have different dimensions."
     
     marginals = marginals.reshape(n, h * w, c)
-    data = data.reshape(len(data), h * w, c)
+    x = x.reshape(len(x), h * w, c)
+    y = y.reshape(len(y), h * w, c)
+
     if params is not None:
-        assert params.shape == (h, w, 3, c), "Marginals and parameters have different dimensions"
+        assert params.shape == (h, w, 3, c), "Marginals and parameters have different dimensions."
         params = params.reshape(h * w, 3, c)
+    
     quantiles = []
     for channel in range(c):
         if params is None:
-            q = np.array([equantile(marginals[:, j, channel], data[:, j, channel]) for j in range(h * w)]).T
+            q = np.array([equantile(marginals[:, j, channel], x[:, j, channel], y[:, j, channel]) for j in range(h * w)]).T
         else:
-            if hasattr(f_thresh, "__len__"):
-                f_thresh = f_thresh.reshape(h * w, c)
+            if hasattr(thresh, "__len__"):
+                thresh = thresh.reshape(h * w, c)
             else:
-                f_thresh = [f_thresh] * (h * w, c)
-            q = np.array([equantile(marginals[:, j, channel], data[:, j, channel], params[j, ..., channel], f_thresh[j, channel]) for j in range(h * w)]).T
+                thresh = [thresh] * (h * w, c)
+            q = np.array([equantile(marginals[:, j, channel], x[:, j, channel], y[:, j, channel], params[j, ..., channel], thresh[j, channel]) for j in range(h * w)]).T
         quantiles.append(q)
+    
     quantiles = np.stack(quantiles, axis=-1)
     quantiles = quantiles.reshape(n, h, w, c)
     return quantiles
 
 
-def equantile(marginals, x, params=None, f_thresh=None):
+def equantile(marginals, x, y, params=None, thresh=None):
     """(Semi)empirical quantile/percent/point function.
     
-    x is vector of interpolated quantiles of data (usually 100,000)"""
+    x [was] a vector of interpolated quantiles of data (usually 100,000)
+    Now x and y are data that original marginals were calculated from, where x
+    is data and y corresponding densities."""
     n = len(x)
     x = sorted(x)
 
@@ -161,8 +186,9 @@ def equantile(marginals, x, params=None, f_thresh=None):
     if marginals.max() >= 1:
         warnings.warn("Some marginals >= 1.")
         marginals *= 1 - 1e-6
-    quantiles = np.array([x[int(q * n)] for q in marginals])
+    quantiles = np.interp(marginals, sorted(y), sorted(x))
     if params is not None:
+        f_thresh = np.interp(thresh, sorted(x), sorted(y))
         if len(quantiles[marginals <= f_thresh]) > 0:
             u_x = quantiles[marginals <= f_thresh].max()
         else:  # just a catch for mad marginals, but shouldn't happen
@@ -194,9 +220,7 @@ def get_ecs(marginals, sample_inds):
     n, h, w = tf.shape(data)[:3]
     data = tf.reshape(data, [n, h * w])
     data = tf.gather(data, sample_inds, axis=1)
-
-    frechet = tf_inv_exp(data)
-
+    frechet = tf_inv_frechet(data)
     ecs = []
     for i in range(len(sample_inds)):
         for j in range(i):
@@ -204,9 +228,15 @@ def get_ecs(marginals, sample_inds):
     return ecs
 
 
-def tf_inv_exp(uniform):
+def tf_exp(uniform):
     # if (uniform == 1).any(): uniform *= 0.9999  # need a TensorFlow analogue
-    exp_distributed = -tf.math.log(1-uniform)
+    exp_distributed = -tf.math.log(1 - uniform)
+    return exp_distributed
+
+
+def tf_inv_frechet(uniform):
+    # if (uniform == 1).any(): uniform *= 0.9999  # need a TensorFlow analogue
+    exp_distributed = -tf.math.log(uniform)
     return exp_distributed
 
 
@@ -290,7 +320,8 @@ def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'w
 
     # train/valid split
     np.random.seed(2)
-    train_inds = np.random.randint(0, marginals.shape[0], train_size)
+    #train_inds = np.random.randint(0, marginals.shape[0], train_size)
+    train_inds = np.random.choice(np.arange(0, marginals.shape[0], 1), size=train_size, replace=False)
 
     marginals_train = np.take(marginals, train_inds, axis=0)
     marginals_test = np.delete(marginals, train_inds, axis=0)

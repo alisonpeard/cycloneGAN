@@ -9,6 +9,8 @@ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
 from .tf_utils import *
 
+channel_labels = {0: r'wind speed [ms$^{-1}$]', 1: 'sig. wave height [m]', 2: 'total precipitation [m]'}
+
 def discrete_colormap(data, nintervals, min=None, cmap="cividis", under='dimgrey'):
     cmap = getattr(mpl.cm, cmap)
     if min is not None:
@@ -67,9 +69,6 @@ def plot_sample_density(data, ax, sample_pixels=None, cmap='cividis'):
     sample_x = tf.gather(data_ravel, sample_pixels_x, axis=1)
     sample_y = tf.gather(data_ravel, sample_pixels_y, axis=1)
 
-    # frechet_x = -tf.math.log(1 - sample_x)
-    # frechet_y = -tf.math.log(1 - sample_y)
-    # ec_xy = raw_extremal_correlation(frechet_x, frechet_y)
     axtitle = f"Pixels ({sample_pixels_x[0]}, {sample_pixels_y[0]})"
     scatter_density(sample_x.numpy(), sample_y.numpy(), ax, title=axtitle, cmap=cmap)
 
@@ -84,11 +83,13 @@ def scatter_density(x, y, ax, title='', cmap='cividis'):
     return ax
 
 
-def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, params=None, thresh=None, channel=0, u_x=None, cmap='cividis'):
-    """Assumes data provided as marginals unless params are provided"""
-    if channel == 1:
+def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, params=None,
+                     thresh=None, channel=0, u_x=None, cmap='cividis'):
+    if channel == 0:
+        corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (332, 311)}
+    elif channel == 1:
         corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (232, 276)}
-    elif channel == 0:
+    elif channel == 2:
         corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (332, 311)}
 
     fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
@@ -120,9 +121,16 @@ def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles,
                 a.axhline(u[0], linestyle='dashed', color='k')
                 a.axvline(u[1], linestyle='dashed', color='k')
 
+        xlim = ax[0].get_xlim()
+        ylim = ax[0].get_ylim()
+        for a in ax:
+            a.set_xlim(xlim)
+            a.set_ylim(ylim)
+
     for ax in axs.ravel():
-        ax.set_xlabel(r'wind speed (ms$^{-1}$)')
-        ax.set_ylabel(r'wind speed (ms$^{-1}$)')
+        ax.set_xlabel(channel_labels[channel])
+        ax.set_ylabel(channel_labels[channel])
+        ax.label_outer()
             
     fig.suptitle(f'Correlations: dimension {channel}')
     return fig
@@ -139,6 +147,8 @@ def compare_channels_plot(train_images, test_images, fake_data, cmap='cividis'):
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
         scatter_density(x, y, ax=axs[i, 0], cmap=cmap)
+
+        xmin, xmax, ymin, ymax = x.min(), x.max(), y.min(), y.max()
 
         n, h, w, c = test_images.shape
         data_ravel = tf.reshape(test_images, [n, h * w, c])

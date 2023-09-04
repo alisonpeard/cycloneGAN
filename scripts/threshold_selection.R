@@ -8,14 +8,13 @@ getmode <- function(v) {
 }
 
 np <- import("numpy")
-var <- 'precip_data'
+var <- 'wind_data'
 
 X <- np$load(paste0("/Users/alison/Documents/DPhil/multivariate/", var, "/train/images.npy"))
 M <- dim(X)[2]
 N <- dim(X)[3]
 
 u_mat <- matrix(nrow=M, ncol=N)  # matrix of threshold values
-f_mat <- matrix(nrow=M, ncol=N)  # matrix of corresponding ECDF values
 n.excesses <- matrix(nrow=M, ncol=N)
 
 for(i in 1:M){
@@ -37,22 +36,17 @@ for(i in 1:M){
       })
       
       best_u <- getmode(summary(var_cv)[, "best u"])
-      #best_i <- getmode(summary(var_cv)[, "index of u_vec"])
-      #best_q <- q_vec[best_i]
-      best_f <- ecdf(x)(best_u)
+      best_u <- max(x[x <= best_u]) # use an actual observation as threshold, important for interpolating
       
-      f_mat[i, j] <- best_f
       u_mat[i, j] <- best_u
       n.excesses[i, j] <- length(x[x > best_u])
     }else{
-      f_mat[i, j] <- 0.
       u_mat[i, j] <- x[1]
     }
   }
 }
 
 np$save(paste0("/Users/alison/Documents/DPhil/multivariate/", var, "/train/thresholds.npy"), u_mat)
-np$save(paste0("/Users/alison/Documents/DPhil/multivariate/", var, "/train/threshold_ecdfs.npy"), f_mat)
 
 
 
