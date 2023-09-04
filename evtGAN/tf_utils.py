@@ -34,7 +34,7 @@ def inverse_gumbel_transform(data):
     return uniform
 
 
-def transform_to_marginals(dataset, thresholds=None, fit_tail=False):
+def probability_integral_transform(dataset, distribution="uniform", thresholds=None, fit_tail=False):
     """Transform data to uniform distribution using ecdf."""
     n, h, w, c = dataset.shape
     assert c == 1, "single channel only"
@@ -48,8 +48,15 @@ def transform_to_marginals(dataset, thresholds=None, fit_tail=False):
 
     uniform = uniform.reshape(n, h, w, 1)
     parameters = parameters.reshape(h, w, 3)
+
+    if distribution == "gumbel":
+        transformed = -np.log(-np.log(uniform))
+    elif distribution == "uniform":
+        transformed = uniform
+    else: 
+        raise ValueError("Unknown distribution: {distribution}.")
     
-    return uniform, parameters
+    return transformed, parameters
 
 
 def semiparametric_cdf(dataset, thresh=None, fit_tail=False):
@@ -66,12 +73,12 @@ def semiparametric_cdf(dataset, thresh=None, fit_tail=False):
     loc = np.empty(J)
     scale = np.empty(J)
     for j in range(J):
-        x[:, j], shape[j], loc[j], scale[j] = semiparametric_marginal(x[:, j], fit_tail=fit_tail, thresh=thresh[j])
+        x[:, j], shape[j], loc[j], scale[j] = semiparametric_marginal_cdf(x[:, j], fit_tail=fit_tail, thresh=thresh[j])
     parameters = np.stack([shape, loc, scale], axis=-1)
     return x, parameters
 
 
-def semiparametric_marginal(x, fit_tail=False, thresh=None):
+def semiparametric_marginal_cdf(x, fit_tail=False, thresh=None):
     """Heffernan & Tawn (2004). 
     
     Note shape parameter is opposite sign to Heffernan & Tawn (2004).
@@ -113,16 +120,6 @@ def rank(x):
 def ecdf(x):
     return rank(x) / (len(x) + 1)
 
-
-# def fit_genpareto(vec):
-#     """Fit a generalised Pareto and return the RMSE of the fit with the density histogram of the data."""
-#     shape, loc, scale = genpareto.fit(vec)
-#     x = np.linspace(genpareto.ppf(0.01, shape, loc, scale), genpareto.ppf(.99, shape, loc, scale), 100)
-#     fitted = genpareto.pdf(x, shape, loc, scale)
-#     density, *_ = plt.hist(vec, bins=x)
-#     rmse = np.sqrt(sum((density - fitted)**2))
-#     return shape, loc, scale, rmse
-
     
 def interpolate_quantiles(marginals, quantiles, n=10000):
     """Interpolate the quantiles for inverse transformations.
@@ -138,7 +135,7 @@ def interpolate_quantiles(marginals, quantiles, n=10000):
     return interpolated_quantiles
 
 
-def transform_to_quantiles(marginals, x, y, params=None, thresh=None):
+def inv_probability_integral_transform(marginals, x, y, params=None, thresh=None):
     """Transform uniform marginals to original distributions, by inverse-interpolating ecdf."""
     assert marginals.ndim == 4, "Function takes rank 4 arrays"
     n, h, w, c = marginals.shape
@@ -157,13 +154,13 @@ def transform_to_quantiles(marginals, x, y, params=None, thresh=None):
     quantiles = []
     for channel in range(c):
         if params is None:
-            q = np.array([equantile(marginals[:, j, channel], x[:, j, channel], y[:, j, channel]) for j in range(h * w)]).T
+            q = np.array([empirical_quantile(marginals[:, j, channel], x[:, j, channel], y[:, j, channel]) for j in range(h * w)]).T
         else:
             if hasattr(thresh, "__len__"):
                 thresh = thresh.reshape(h * w, c)
             else:
                 thresh = [thresh] * (h * w, c)
-            q = np.array([equantile(marginals[:, j, channel], x[:, j, channel], y[:, j, channel], params[j, ..., channel], thresh[j, channel]) for j in range(h * w)]).T
+            q = np.array([empirical_quantile(marginals[:, j, channel], x[:, j, channel], y[:, j, channel], params[j, ..., channel], thresh[j, channel]) for j in range(h * w)]).T
         quantiles.append(q)
     
     quantiles = np.stack(quantiles, axis=-1)
@@ -171,7 +168,7 @@ def transform_to_quantiles(marginals, x, y, params=None, thresh=None):
     return quantiles
 
 
-def equantile(marginals, x, y, params=None, thresh=None):
+def empirical_quantile(marginals, x, y, params=None, thresh=None):
     """(Semi)empirical quantile/percent/point function.
     
     x [was] a vector of interpolated quantiles of data (usually 100,000)
@@ -207,12 +204,12 @@ def upper_ppf(marginals, u_x, thresh, params):
     return x
 
 
-def gev_ppf(q, params):
-    """To replace nans with zeros."""
-    if sum(params) > 0:
-        return genpareto.ppf(q, *params)
-    else:
-        return 0.
+# def gev_ppf(q, params):
+#     """To replace nans with zeros."""
+#     if sum(params) > 0:
+#         return genpareto.ppf(q, *params)
+#     else:
+#         return 0.
 
 
 def get_ecs(marginals, sample_inds):

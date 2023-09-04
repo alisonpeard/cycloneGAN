@@ -8,7 +8,7 @@ getmode <- function(v) {
 }
 
 np <- import("numpy")
-var <- 'wind_data'
+var <- 'wave_data'
 
 X <- np$load(paste0("/Users/alison/Documents/DPhil/multivariate/", var, "/train/images.npy"))
 M <- dim(X)[2]

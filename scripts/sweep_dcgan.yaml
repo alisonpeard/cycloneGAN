@@ -1,5 +1,5 @@
 program: train_dcgan.py
-name: August1523_1100
+name: Sept04-new-transforms
 method: bayes
 project: evtGAN
 metric:
