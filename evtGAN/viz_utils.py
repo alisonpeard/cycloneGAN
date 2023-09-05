@@ -83,8 +83,8 @@ def scatter_density(x, y, ax, title='', cmap='cividis'):
     return ax
 
 
-def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, params=None,
-                     thresh=None, channel=0, u_x=None, cmap='cividis'):
+def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, x, y, params=None,
+                     thresh=None, channel=0, cmap='cividis', inverse_transform=True):
     if channel == 0:
         corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (332, 311)}
     elif channel == 1:
@@ -93,13 +93,20 @@ def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles,
         corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (332, 311)}
 
     fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
-    train_quantiles = transform_to_quantiles(train_marginals, quantiles, params, thresh)
-    test_quantiles = transform_to_quantiles(test_marginals, quantiles, params, thresh)
-    fake_quantiles = transform_to_quantiles(fake_marginals, quantiles, params, thresh)
 
-    if u_x is not None:
-        h, w, c = u_x.shape
-        u_x = u_x.reshape(h * w, c)
+    if inverse_transform:
+        train_quantiles = inv_probability_integral_transform(train_marginals, x, y, params, thresh)
+        test_quantiles = inv_probability_integral_transform(test_marginals, x, y, params, thresh)
+        fake_quantiles = inv_probability_integral_transform(fake_marginals, x, y, params, thresh)
+    else:
+        train_quantiles = train_marginals
+        test_quantiles = test_marginals
+        fake_quantiles = fake_marginals
+        thresh = interpolate_thresholds(thresh, x, y)
+
+    if thresh is not None:
+        h, w, c = thresh.shape
+        thresh = thresh.reshape(h * w, c)
 
     for i, sample_pixels in enumerate([*corrs.values()]):
         ax = axs[i, :]
@@ -113,26 +120,32 @@ def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles,
         ax[1].set_title(f'$\chi$: {ec:.4f}')
         ec = get_ecs(fake_marginals[..., channel], sample_pixels)[0]
         ax[2].set_title(f'$\chi$: {ec:.4f}')
+        ax[0].set_ylabel(f'Pixels: {sample_pixels[0], sample_pixels[1]}\n{channel_labels[channel]}')
 
-        if u_x is not None:
-            u = (u_x[sample_pixels[0], channel], u_x[sample_pixels[1], channel])
+        if thresh is not None:
+            u = (thresh[sample_pixels[0], channel], thresh[sample_pixels[1], channel])
 
             for a in ax:
-                a.axhline(u[0], linestyle='dashed', color='k')
+                a.axhline(u[0], linestyle='dashed', color='k', label='Threshold')
                 a.axvline(u[1], linestyle='dashed', color='k')
 
         xlim = ax[0].get_xlim()
         ylim = ax[0].get_ylim()
+
         for a in ax:
             a.set_xlim(xlim)
             a.set_ylim(ylim)
 
+    axs[2, 0].set_xlabel(f'{channel_labels[channel]}\nTrain set')
+    axs[2, 1].set_xlabel(f'{channel_labels[channel]}\nTest set')
+    axs[2, 2].set_xlabel(f'{channel_labels[channel]}\nGenerated set')
+
+    axs[0, 0].legend(loc='upper left')
+
     for ax in axs.ravel():
-        ax.set_xlabel(channel_labels[channel])
-        ax.set_ylabel(channel_labels[channel])
         ax.label_outer()
             
-    fig.suptitle(f'Correlations: dimension {channel}')
+    fig.suptitle(f'Correlations: {channel_labels[channel]}')
     return fig
 
 

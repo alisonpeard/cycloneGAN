@@ -46,8 +46,9 @@ def save_config(dir):
 
 def main(config):
     # load data
-    train_marginals, test_marginals, quantiles, *_ = tf_utils.load_marginals_and_quantiles(datadir, config.train_size, paddings=paddings)
-    
+    train_marginals, _, params, images, thresholds = tf_utils.load_training_data(datadir, config.train_size, paddings=paddings)
+    test_marginals, *_ = tf_utils.load_test_data(datadir)
+
     train = tf.data.Dataset.from_tensor_slices(train_marginals).batch(config.batch_size)
     test = tf.data.Dataset.from_tensor_slices(test_marginals).batch(config.batch_size)
 
@@ -79,14 +80,13 @@ def main(config):
     log_image_to_wandb(fig, f'generated_marginals', imdir)
 
     # get rough ecs without the tail-fitting
-    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0)
+    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, images, train_marginals, channel=0)
     log_image_to_wandb(fig, 'correlations_u10', imdir)
 
-    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, quantiles, channel=0)
+    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, images, train_marginals, channel=0)
     log_image_to_wandb(fig, 'correlations_v10', imdir)
 
-    fig = viz_utils.compare_channels_plot(train_marginals, test_marginals, fake_marginals)
-    log_image_to_wandb(fig, 'correlations multivariate', imdir)
+    #plt.show()
 
 
 if __name__ == "__main__":

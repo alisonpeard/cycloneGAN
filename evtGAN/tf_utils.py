@@ -87,13 +87,13 @@ def semiparametric_marginal_cdf(x, fit_tail=False, thresh=None):
     if (x.max() - x.min()) == 0.:
         return np.array([0.] * len(x)), 0, 0, 0
     
-    f = ecdf(x)  # ecdf(x).cdf.evaluate(x)
+    f = ecdf(x)
     
     if fit_tail:
         assert thresh is not None, "Threshold must be supplied if fitting tail."
         x_tail = x[x > thresh]
         f_tail = f[x > thresh]
-        x_tail = x_tail.astype(np.float64)  # otherwise f_thresh gets rounded too low
+        x_tail = x_tail.astype(np.float64)  # otherwise f_thresh gets rounded down below f_thresh
         shape, loc, scale = genpareto.fit(x_tail, floc=thresh, method="MLE")
         f_thresh = np.interp(thresh, sorted(x), sorted(f)) #ecdf(x).cdf.evaluate(thresh)
         f_tail = 1 - (1 - f_thresh) * (np.maximum(0, (1 - shape * (x_tail - thresh) / scale)) ** (1 / shape))  # second set of parenthesis important
@@ -139,9 +139,10 @@ def inv_probability_integral_transform(marginals, x, y, params=None, thresh=None
     """Transform uniform marginals to original distributions, by inverse-interpolating ecdf."""
     assert marginals.ndim == 4, "Function takes rank 4 arrays"
     n, h, w, c = marginals.shape
-    assert x.shape[1:] == (h, w, c), "Marginals and x have different dimensions."
-    assert y.shape[1:] == (h, w, c), "Marginals and y have different dimensions."
-    assert x.shape[0] == y.shape[0], "x and y have different dimensions."
+
+    assert x.shape[1:] == (h, w, c), f"Marginals and x have different dimensions: {x.shape[1:]} != {h, w, c}."
+    assert y.shape[1:] == (h, w, c), f"Marginals and y have different dimensions: {y.shape[1:]} != {h, w, c}."
+    assert x.shape[0] == tf.shape(y)[0], f"x and y have different dimensions: {x.shape[0]} != {y.shape[0]}."
     
     marginals = marginals.reshape(n, h * w, c)
     x = x.reshape(len(x), h * w, c)
@@ -204,14 +205,6 @@ def upper_ppf(marginals, u_x, thresh, params):
     return x
 
 
-# def gev_ppf(q, params):
-#     """To replace nans with zeros."""
-#     if sum(params) > 0:
-#         return genpareto.ppf(q, *params)
-#     else:
-#         return 0.
-
-
 def get_ecs(marginals, sample_inds):
     data = tf.cast(marginals, dtype=tf.float32)
     n, h, w = tf.shape(data)[:3]
@@ -226,13 +219,11 @@ def get_ecs(marginals, sample_inds):
 
 
 def tf_exp(uniform):
-    # if (uniform == 1).any(): uniform *= 0.9999  # need a TensorFlow analogue
     exp_distributed = -tf.math.log(1 - uniform)
     return exp_distributed
 
 
 def tf_inv_frechet(uniform):
-    # if (uniform == 1).any(): uniform *= 0.9999  # need a TensorFlow analogue
     exp_distributed = -tf.math.log(uniform)
     return exp_distributed
 
@@ -271,6 +262,22 @@ def gaussian_blur(img, kernel_size=11, sigma=5):
                                   padding='SAME', data_format='NHWC')
 
 
+def interpolate_thresholds(thresholds, x, y):
+    n, h, w, c = x.shape
+    
+    thresholds = thresholds.reshape(h * w, c)
+    x = x.reshape(n, h * w, c)
+    y = y.reshape(n, h * w, c)
+    f_thresholds = np.empty([h * w, c])
+    
+    for i in range(c):
+        for j in range(h * w):
+            f_thresholds[j, i] = np.interp(thresholds[j, i], x[:, j, i], y[:, j, i])
+                           
+    f_thresholds = f_thresholds.reshape(h, w, c)
+    return f_thresholds
+
+
 ########################################################################################################
 def load_data(datadir, imsize=(18, 22), conditions='all', dim=None):
     """Load wind image data to correct size."""
@@ -289,28 +296,21 @@ def load_data(datadir, imsize=(18, 22), conditions='all', dim=None):
     return data.numpy(), cyclone_flag
 
 
-def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
+def load_training_data(datadir, train_size=200, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
     marginals = []
-    quantiles = []
     images = []
     params = []
     thresholds = []
-    threshold_ecdfs = []
     for data in datas:
         marginals.append(np.load(os.path.join(datadir, data, 'train', 'marginals.npy'))[..., 0])
-        quantiles.append(np.load(os.path.join(datadir, data, 'train', 'quantiles.npy')))
         params.append(np.load(os.path.join(datadir, data, 'train', 'params.npy')))
         images.append(np.load(os.path.join(datadir, data, 'train', 'images.npy'))[..., 0])
         thresholds.append(np.load(os.path.join(datadir, data, 'train', 'thresholds.npy')))
-        threshold_ecdfs.append(np.load(os.path.join(datadir, data, 'train', 'threshold_ecdfs.npy')))
-
 
     marginals = np.stack(marginals, axis=-1)
-    quantiles = np.stack(quantiles, axis=-1)
     params = np.stack(params, axis=-1)
     images = np.stack(images, axis=-1)
     thresholds = np.stack(thresholds, axis=-1)
-    threshold_ecdfs = np.stack(threshold_ecdfs, axis=-1)
 
     # paddings
     marginals = tf.pad(marginals, paddings)
@@ -322,5 +322,25 @@ def load_marginals_and_quantiles(datadir, train_size=200, datas=['wind_data', 'w
 
     marginals_train = np.take(marginals, train_inds, axis=0)
     marginals_test = np.delete(marginals, train_inds, axis=0)
-    return marginals_train, marginals_test, quantiles, params, images, thresholds, threshold_ecdfs
+    images = np.take(images, train_inds, axis=0)
+    return marginals_train, marginals_test, params, images, thresholds
 
+
+
+def load_test_data(datadir, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
+    marginals = []
+    images = []
+    params = []
+
+    for data in datas:
+        marginals.append(np.load(os.path.join(datadir, data, 'test', 'marginals.npy'))[..., 0])
+        params.append(np.load(os.path.join(datadir, data, 'train', 'params.npy')))
+        images.append(np.load(os.path.join(datadir, data, 'test', 'images.npy'))[..., 0])
+
+    marginals = np.stack(marginals, axis=-1)
+    params = np.stack(params, axis=-1)
+    images = np.stack(images, axis=-1)
+
+    # paddings
+    marginals = tf.pad(marginals, paddings)
+    return marginals, images, params
