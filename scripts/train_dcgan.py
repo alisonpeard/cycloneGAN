@@ -26,7 +26,7 @@ plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
 # some static variables
 cwd = os.getcwd() # scripts directory
 wd = os.path.join(cwd, "..") # cycloneGAN directory
-datadir = os.path.join(wd, "..", "multivariate") # keep data folder in parent directory 
+datadir = os.path.join(wd, "..", "..", "multivariate") # keep data folder in parent directory 
 imdir = os.path.join(wd, 'figures', 'temp')
 paddings = tf.constant([[0,0], [1,1], [1,1], [0,0]])
 
@@ -46,8 +46,8 @@ def save_config(dir):
 
 def main(config):
     # load data
-    train_marginals, _, params, images, thresholds = tf_utils.load_training_data(datadir, config.train_size, paddings=paddings)
-    test_marginals, *_ = tf_utils.load_test_data(datadir)
+    train_marginals, test_marginals, params, images, thresholds = tf_utils.load_training_data(datadir, config.train_size, paddings=paddings)
+    #test_marginals, *_ = tf_utils.load_test_data(datadir)
 
     train = tf.data.Dataset.from_tensor_slices(train_marginals).batch(config.batch_size)
     test = tf.data.Dataset.from_tensor_slices(test_marginals).batch(config.batch_size)

@@ -8,7 +8,7 @@ getmode <- function(v) {
 }
 
 np <- import("numpy")
-var <- 'wave_data'
+var <- 'precip_data'
 
 X <- np$load(paste0("/Users/alison/Documents/DPhil/multivariate/", var, "/train/images.npy"))
 M <- dim(X)[2]
@@ -24,7 +24,7 @@ for(i in 1:M){
       npy <- 365 # observations for every day of the year
       attr(x, 'npy') <- npy
       
-      # restrict search so that number of excesses always >= 50
+      # restrict search so that number of excesses always >= 10
       max.allowed <- sort(x)[(length(x) - 50)]
       max.quantile <- ecdf(x)(max.allowed)
       
@@ -47,8 +47,6 @@ for(i in 1:M){
 }
 
 np$save(paste0("/Users/alison/Documents/DPhil/multivariate/", var, "/train/thresholds.npy"), u_mat)
-
-
 
 if(FALSE){
   summary(var_cv)

@@ -12,6 +12,15 @@ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
 SEED = 42
 
+def translate_indices(i, dims=(18, 22)):
+    indices = np.arange(0, dims[0] * dims[1], 1)
+    x = np.argwhere(indices.reshape(dims[0], dims[1]) == i)
+    return tuple(*map(tuple, x))
+
+def translate_indices_r(i, j, dims=(18, 22)):
+    indices = np.arange(0, dims[0] * dims[1], 1)
+    x = indices.reshape(dims[0], dims[1])[i, j]
+    return x
 
 def tf_unpad(tensor, paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
     """Mine: remove Tensor paddings"""
@@ -34,7 +43,7 @@ def inverse_gumbel_transform(data):
     return uniform
 
 
-def probability_integral_transform(dataset, distribution="uniform", thresholds=None, fit_tail=False):
+def probability_integral_transform(dataset, distribution="uniform", prior=None, thresholds=None, fit_tail=False):
     """Transform data to uniform distribution using ecdf."""
     n, h, w, c = dataset.shape
     assert c == 1, "single channel only"
@@ -44,7 +53,7 @@ def probability_integral_transform(dataset, distribution="uniform", thresholds=N
         assert thresholds is not None, "Thresholds must be supplied if fitting tail."
         thresholds = thresholds.reshape(h * w)
 
-    uniform, parameters = semiparametric_cdf(dataset, thresholds, fit_tail=fit_tail)
+    uniform, parameters = semiparametric_cdf(dataset, prior, thresholds, fit_tail=fit_tail)
 
     uniform = uniform.reshape(n, h, w, 1)
     parameters = parameters.reshape(h, w, 3)
@@ -59,7 +68,7 @@ def probability_integral_transform(dataset, distribution="uniform", thresholds=N
     return transformed, parameters
 
 
-def semiparametric_cdf(dataset, thresh=None, fit_tail=False):
+def semiparametric_cdf(dataset, prior=None, thresh=None, fit_tail=False):
     assert dataset.ndim == 2, "Requires 2 dimensions"
     x = dataset.copy()
     n, J = np.shape(x)
@@ -73,12 +82,12 @@ def semiparametric_cdf(dataset, thresh=None, fit_tail=False):
     loc = np.empty(J)
     scale = np.empty(J)
     for j in range(J):
-        x[:, j], shape[j], loc[j], scale[j] = semiparametric_marginal_cdf(x[:, j], fit_tail=fit_tail, thresh=thresh[j])
+        x[:, j], shape[j], loc[j], scale[j] = semiparametric_marginal_cdf(x[:, j], prior=prior, fit_tail=fit_tail, thresh=thresh[j])
     parameters = np.stack([shape, loc, scale], axis=-1)
     return x, parameters
 
 
-def semiparametric_marginal_cdf(x, fit_tail=False, thresh=None):
+def semiparametric_marginal_cdf(x, prior=None, fit_tail=False, thresh=None):
     """Heffernan & Tawn (2004). 
     
     Note shape parameter is opposite sign to Heffernan & Tawn (2004).
@@ -95,7 +104,7 @@ def semiparametric_marginal_cdf(x, fit_tail=False, thresh=None):
         f_tail = f[x > thresh]
         x_tail = x_tail.astype(np.float64)  # otherwise f_thresh gets rounded down below f_thresh
         shape, loc, scale = genpareto.fit(x_tail, floc=thresh, method="MLE")
-        f_thresh = np.interp(thresh, sorted(x), sorted(f)) #ecdf(x).cdf.evaluate(thresh)
+        f_thresh = np.interp(thresh, sorted(x), sorted(f))
         f_tail = 1 - (1 - f_thresh) * (np.maximum(0, (1 - shape * (x_tail - thresh) / scale)) ** (1 / shape))  # second set of parenthesis important
         assert min(f_tail) >= f_thresh, "Error in upper tail calculation."
         f[x > thresh] = f_tail

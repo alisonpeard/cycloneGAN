@@ -11,6 +11,12 @@ from .tf_utils import *
 
 channel_labels = {0: r'wind speed [ms$^{-1}$]', 1: 'sig. wave height [m]', 2: 'total precipitation [m]'}
 
+
+longitude = np.linspace(80.0, 95.0, 3)
+latitude = np.linspace(10.0, 25.0, 4)
+
+
+
 def discrete_colormap(data, nintervals, min=None, cmap="cividis", under='dimgrey'):
     cmap = getattr(mpl.cm, cmap)
     if min is not None:

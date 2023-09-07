@@ -1,8 +1,8 @@
 # training settings
 nepochs:
-  value: 5000
+  value: 1000
 train_size:
-  value: 100
+  value: 200
 batch_size:
   value: 50
 chi_frequency:
