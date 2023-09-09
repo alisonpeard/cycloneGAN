@@ -2,7 +2,7 @@
 nepochs:
   value: 1000
 train_size:
-  value: 200
+  value: 1000
 batch_size:
   value: 50
 chi_frequency:

@@ -26,7 +26,7 @@ plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
 # some static variables
 cwd = os.getcwd() # scripts directory
 wd = os.path.join(cwd, "..") # cycloneGAN directory
-datadir = os.path.join(wd, "..", "..", "multivariate") # keep data folder in parent directory 
+datadir = os.path.join(wd, "..", "multivariate") # keep data folder in parent directory 
 imdir = os.path.join(wd, 'figures', 'temp')
 paddings = tf.constant([[0,0], [1,1], [1,1], [0,0]])
 

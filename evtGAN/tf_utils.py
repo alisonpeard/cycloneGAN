@@ -213,6 +213,22 @@ def upper_ppf(marginals, u_x, thresh, params):
     x = u_x + (scale / shape) * (1 - ((1 - marginals) / (1 - thresh))**shape)
     return x
 
+def get_kl_dissimilarity(marginals, sample_indices, thresholds):
+    """Vignotto (2021) §2.3"""
+    # TODO: finish this
+    assert len(sample_indices) == 2, "Can only be calculated for bivariate data."
+    n, h, w, c = marginals.shape
+    marginals = marginals.reshape(n, h * w, c)
+    thresholds = thresholds.reshape(h * w, c)
+    for channel in range(c):
+        for j in sample_indices:
+            marginals_cj = marginals[:, j, channel]
+            thresh_cj = thresholds[j, channel]
+            marginals_cj = marginals_cj[marginals_cj > thresh_cj]
+
+            pareto = 1 / (1 - marginals_cj)
+    pass
+
 
 def get_ecs(marginals, sample_inds):
     data = tf.cast(marginals, dtype=tf.float32)
@@ -220,10 +236,10 @@ def get_ecs(marginals, sample_inds):
     data = tf.reshape(data, [n, h * w])
     data = tf.gather(data, sample_inds, axis=1)
     frechet = tf_inv_frechet(data)
-    ecs = []
+    ecs = {}
     for i in range(len(sample_inds)):
         for j in range(i):
-            ecs.append(raw_extremal_correlation(frechet[:, i], frechet[:, j]))
+            ecs[sample_inds[i], sample_inds[j]] = raw_extremal_correlation(frechet[:, i], frechet[:, j]).numpy()
     return ecs
 
 
@@ -326,14 +342,12 @@ def load_training_data(datadir, train_size=200, datas=['wind_data', 'wave_data',
 
     # train/valid split
     np.random.seed(2)
-    #train_inds = np.random.randint(0, marginals.shape[0], train_size)
     train_inds = np.random.choice(np.arange(0, marginals.shape[0], 1), size=train_size, replace=False)
 
     marginals_train = np.take(marginals, train_inds, axis=0)
     marginals_test = np.delete(marginals, train_inds, axis=0)
     images = np.take(images, train_inds, axis=0)
     return marginals_train, marginals_test, params, images, thresholds
-
 
 
 def load_test_data(datadir, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
@@ -343,7 +357,7 @@ def load_test_data(datadir, datas=['wind_data', 'wave_data', 'precip_data'], pad
 
     for data in datas:
         marginals.append(np.load(os.path.join(datadir, data, 'test', 'marginals.npy'))[..., 0])
-        params.append(np.load(os.path.join(datadir, data, 'train', 'params.npy')))
+        params.append(np.load(os.path.join(datadir, data, 'train', 'params.npy'))) # params from training set
         images.append(np.load(os.path.join(datadir, data, 'test', 'images.npy'))[..., 0])
 
     marginals = np.stack(marginals, axis=-1)

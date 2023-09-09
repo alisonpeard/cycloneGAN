@@ -5,16 +5,12 @@ import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 import matplotlib as mpl
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
-# import geopandas as gpd
-
 from .tf_utils import *
 
+
 channel_labels = {0: r'wind speed [ms$^{-1}$]', 1: 'sig. wave height [m]', 2: 'total precipitation [m]'}
-
-
 longitude = np.linspace(80.0, 95.0, 3)
 latitude = np.linspace(10.0, 25.0, 4)
-
 
 
 def discrete_colormap(data, nintervals, min=None, cmap="cividis", under='dimgrey'):
@@ -57,6 +53,74 @@ def plot_generated_marginals(fake_data, start=0):
     return fig
 
 
+def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, x, y, params=None,
+                     thresh=None, channel=0, cmap='cividis', inverse_transform=True):
+    if channel == 0:
+        corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (332, 311)}
+    elif channel == 1:
+        corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (232, 276)}
+    elif channel == 2:
+        corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (332, 311)}
+
+    fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
+
+    if inverse_transform:
+        train_quantiles = inv_probability_integral_transform(train_marginals, x, y, params, thresh)
+        test_quantiles = inv_probability_integral_transform(test_marginals, x, y, params, thresh)
+        fake_quantiles = inv_probability_integral_transform(fake_marginals, x, y, params, thresh)
+    else:
+        train_quantiles = train_marginals
+        test_quantiles = test_marginals
+        fake_quantiles = fake_marginals
+        thresh = interpolate_thresholds(thresh, x, y)
+
+    if thresh is not None:
+        h, w, c = thresh.shape
+        thresh = thresh.reshape(h * w, c)
+
+    for i, sample_pixels in enumerate([*corrs.values()]):
+        ax = axs[i, :]
+        plot_sample_density(train_quantiles[..., channel], ax[0], sample_pixels=sample_pixels, cmap=cmap)
+        plot_sample_density(test_quantiles[..., channel], ax[1], sample_pixels=sample_pixels, cmap=cmap)
+        plot_sample_density(fake_quantiles[..., channel], ax[2], sample_pixels=sample_pixels, cmap=cmap)
+
+        ec = [*get_ecs(train_marginals[..., channel], sample_pixels).values()][0]
+        ax[0].set_title(f'$\chi$: {ec:.4f}')
+        ec = [*get_ecs(test_marginals[..., channel], sample_pixels).values()][0]
+        ax[1].set_title(f'$\chi$: {ec:.4f}')
+        ec = [*get_ecs(fake_marginals[..., channel], sample_pixels).values()][0]
+        ax[2].set_title(f'$\chi$: {ec:.4f}')
+        ax[0].set_ylabel(f'Pixels: {sample_pixels[0], sample_pixels[1]}\n{channel_labels[channel]}')
+
+        if thresh is not None:
+            u = (thresh[sample_pixels[0], channel], thresh[sample_pixels[1], channel])
+
+            for a in ax:
+                a.axhline(u[0], linestyle='dashed', color='k', label='Threshold')
+                a.axvline(u[1], linestyle='dashed', color='k')
+
+        xlim = ax[0].get_xlim()
+        ylim = ax[0].get_ylim()
+
+        for a in ax:
+            a.set_xlim(xlim)
+            a.set_ylim(ylim)
+
+    axs[2, 0].set_xlabel(f'{channel_labels[channel]}\nTrain set')
+    axs[2, 1].set_xlabel(f'{channel_labels[channel]}\nTest set')
+    axs[2, 2].set_xlabel(f'{channel_labels[channel]}\nGenerated set')
+
+    axs[0, 0].legend(loc='upper left')
+
+    for ax in axs.ravel():
+        ax.label_outer()
+            
+    suptitle = f'Correlations: {channel_labels[channel]}'
+    suptitle = suptitle if inverse_transform else f'{suptitle} (uniform marginals)'
+    fig.suptitle(suptitle)
+    return fig
+
+
 def plot_sample_density(data, ax, sample_pixels=None, cmap='cividis'):
     """For generated quantiles."""
     h, w = data.shape[1:3]
@@ -89,70 +153,15 @@ def scatter_density(x, y, ax, title='', cmap='cividis'):
     return ax
 
 
-def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, x, y, params=None,
-                     thresh=None, channel=0, cmap='cividis', inverse_transform=True):
-    if channel == 0:
-        corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (332, 311)}
-    elif channel == 1:
-        corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (232, 276)}
-    elif channel == 2:
-        corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (332, 311)}
-
-    fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
-
-    if inverse_transform:
-        train_quantiles = inv_probability_integral_transform(train_marginals, x, y, params, thresh)
-        test_quantiles = inv_probability_integral_transform(test_marginals, x, y, params, thresh)
-        fake_quantiles = inv_probability_integral_transform(fake_marginals, x, y, params, thresh)
-    else:
-        train_quantiles = train_marginals
-        test_quantiles = test_marginals
-        fake_quantiles = fake_marginals
-        thresh = interpolate_thresholds(thresh, x, y)
-
-    if thresh is not None:
-        h, w, c = thresh.shape
-        thresh = thresh.reshape(h * w, c)
-
-    for i, sample_pixels in enumerate([*corrs.values()]):
-        ax = axs[i, :]
-        plot_sample_density(train_quantiles[..., channel], ax[0], sample_pixels=sample_pixels, cmap=cmap)
-        plot_sample_density(test_quantiles[..., channel], ax[1], sample_pixels=sample_pixels, cmap=cmap)
-        plot_sample_density(fake_quantiles[..., channel], ax[2], sample_pixels=sample_pixels, cmap=cmap)
-
-        ec = get_ecs(train_marginals[..., channel], sample_pixels)[0]
-        ax[0].set_title(f'$\chi$: {ec:.4f}')
-        ec = get_ecs(test_marginals[..., channel], sample_pixels)[0]
-        ax[1].set_title(f'$\chi$: {ec:.4f}')
-        ec = get_ecs(fake_marginals[..., channel], sample_pixels)[0]
-        ax[2].set_title(f'$\chi$: {ec:.4f}')
-        ax[0].set_ylabel(f'Pixels: {sample_pixels[0], sample_pixels[1]}\n{channel_labels[channel]}')
-
-        if thresh is not None:
-            u = (thresh[sample_pixels[0], channel], thresh[sample_pixels[1], channel])
-
-            for a in ax:
-                a.axhline(u[0], linestyle='dashed', color='k', label='Threshold')
-                a.axvline(u[1], linestyle='dashed', color='k')
-
-        xlim = ax[0].get_xlim()
-        ylim = ax[0].get_ylim()
-
-        for a in ax:
-            a.set_xlim(xlim)
-            a.set_ylim(ylim)
-
-    axs[2, 0].set_xlabel(f'{channel_labels[channel]}\nTrain set')
-    axs[2, 1].set_xlabel(f'{channel_labels[channel]}\nTest set')
-    axs[2, 2].set_xlabel(f'{channel_labels[channel]}\nGenerated set')
-
-    axs[0, 0].legend(loc='upper left')
-
-    for ax in axs.ravel():
-        ax.label_outer()
-            
-    fig.suptitle(f'Correlations: {channel_labels[channel]}')
-    return fig
+def scatter_density2(x, y, ax, title='', cmap='cividis'):
+    """Sometimes first doesn't work -- need to resolve why later."""
+    xy = np.vstack([x,y])
+    z = gaussian_kde(xy)(xy)
+    idx = z.argsort()
+    x, y, z = x[idx], y[idx], z[idx]
+    ax.scatter(x, y, c=z, s=10, cmap=cmap)
+    ax.set_title(title)
+    return ax
 
 
 def compare_channels_plot(train_images, test_images, fake_data, cmap='cividis'):
@@ -166,8 +175,6 @@ def compare_channels_plot(train_images, test_images, fake_data, cmap='cividis'):
         x = np.array([data_sample[:, 0]]).transpose()
         y = np.array([data_sample[:, 1]]).transpose()
         scatter_density(x, y, ax=axs[i, 0], cmap=cmap)
-
-        xmin, xmax, ymin, ymax = x.min(), x.max(), y.min(), y.max()
 
         n, h, w, c = test_images.shape
         data_ravel = tf.reshape(test_images, [n, h * w, c])
