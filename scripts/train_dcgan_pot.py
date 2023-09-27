@@ -20,17 +20,15 @@ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 from evtGAN import ChiScore, CrossEntropy, DCGAN, tf_utils, viz_utils, compile_dcgan
 
 global rundir
-global evt_type
 
 plot_kwargs = {'bbox_inches': 'tight', 'dpi': 300}
 
 # some static variables
 cwd = os.getcwd() # scripts directory
 wd = os.path.join(cwd, "..") # cycloneGAN directory
-datadir = os.path.join(wd, "..") # keep data folder in parent directory 
+datadir = os.path.join(wd, "..", "multivariate") # keep data folder in parent directory 
 imdir = os.path.join(wd, 'figures', 'temp')
 paddings = tf.constant([[0,0], [1,1], [1,1], [0,0]])
-evt_type = "bm"
 
 
 def log_image_to_wandb(fig, name:str, dir:str):
@@ -48,7 +46,9 @@ def save_config(dir):
 
 def main(config):
     # load data
-    train_marginals, test_marginals, params, images, thresholds = tf_utils.load_training_data(datadir, config.train_size, evt_type=evt_type, paddings=paddings)
+    train_marginals, test_marginals, params, images, thresholds = tf_utils.load_training_data(datadir, config.train_size, paddings=paddings)
+    #test_marginals, *_ = tf_utils.load_test_data(datadir)
+
     train = tf.data.Dataset.from_tensor_slices(train_marginals).batch(config.batch_size)
     test = tf.data.Dataset.from_tensor_slices(test_marginals).batch(config.batch_size)
 
@@ -80,19 +80,19 @@ def main(config):
     log_image_to_wandb(fig, f'generated_marginals', imdir)
 
     # get rough ecs without the tail-fitting
-    # fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, images, train_marginals, channel=0)
-    # log_image_to_wandb(fig, 'correlations_u10', imdir)
+    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, images, train_marginals, channel=0)
+    log_image_to_wandb(fig, 'correlations_u10', imdir)
 
-    # fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, images, train_marginals, channel=0)
-    # log_image_to_wandb(fig, 'correlations_v10', imdir)
+    fig = viz_utils.compare_ecs_plot(train_marginals, test_marginals, fake_marginals, images, train_marginals, channel=0)
+    log_image_to_wandb(fig, 'correlations_v10', imdir)
 
-    plt.show()
+    #plt.show()
 
 
 if __name__ == "__main__":
     wandb.init(settings=wandb.Settings(code_dir=".")) # saves snapshot of code as artifact (less useful now)
 
-    rundir = os.path.join(wd, "saved-models", evt_type, wandb.run.name)
+    rundir = os.path.join(wd, "saved-models", wandb.run.name)
     os.makedirs(rundir)
 
     tf.keras.utils.set_random_seed(wandb.config['seed']) # sets seeds for base-python, numpy and tf

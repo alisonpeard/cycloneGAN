@@ -9,6 +9,7 @@ from .tf_utils import *
 
 
 channel_labels = {0: r'wind speed [ms$^{-1}$]', 1: 'sig. wave height [m]', 2: 'total precipitation [m]'}
+variable_labels = {'wind_data': r'wind speed [ms$^{-1}$]', 'wave_data': 'sig. wave height [m]', 'precip_data': 'total precipitation [m]'}
 longitude = np.linspace(80.0, 95.0, 3)
 latitude = np.linspace(10.0, 25.0, 4)
 
@@ -53,10 +54,10 @@ def plot_generated_marginals(fake_data, start=0):
     return fig
 
 
-def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, x, y, params=None,
-                     thresh=None, channel=0, cmap='cividis', inverse_transform=True):
+def compare_tails_plot(train_marginals, test_marginals, fake_marginals, x, y, params=None,
+                     thresh=None, channel=0, cmap='cividis', inverse_transform=True, evt_type="pot"):
     if channel == 0:
-        corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (332, 311)}
+        corrs = {'low': (120, 373), 'medium': (294, 189), 'high': (332, 311)}
     elif channel == 1:
         corrs = {'low': (121, 373), 'medium': (294, 189), 'high': (232, 276)}
     elif channel == 2:
@@ -65,14 +66,15 @@ def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, x, y, para
     fig, axs = plt.subplots(3, 3, figsize=(10, 10), layout='tight')
 
     if inverse_transform:
-        train_quantiles = inv_probability_integral_transform(train_marginals, x, y, params, thresh)
-        test_quantiles = inv_probability_integral_transform(test_marginals, x, y, params, thresh)
-        fake_quantiles = inv_probability_integral_transform(fake_marginals, x, y, params, thresh)
+        train_quantiles = inv_probability_integral_transform(train_marginals, x, y, params, evt_type, thresh)
+        test_quantiles = inv_probability_integral_transform(test_marginals, x, y, params, evt_type, thresh)
+        fake_quantiles = inv_probability_integral_transform(fake_marginals, x, y, params, evt_type, thresh)
     else:
         train_quantiles = train_marginals
         test_quantiles = test_marginals
         fake_quantiles = fake_marginals
-        thresh = interpolate_thresholds(thresh, x, y)
+        if thresh is not None:
+            thresh = interpolate_thresholds(thresh, x, y)
 
     if thresh is not None:
         h, w, c = thresh.shape
@@ -84,13 +86,13 @@ def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, x, y, para
         plot_sample_density(test_quantiles[..., channel], ax[1], sample_pixels=sample_pixels, cmap=cmap)
         plot_sample_density(fake_quantiles[..., channel], ax[2], sample_pixels=sample_pixels, cmap=cmap)
 
-        ec = [*get_ecs(train_marginals[..., channel], sample_pixels).values()][0]
-        ax[0].set_title(f'$\chi$: {ec:.4f}')
-        ec = [*get_ecs(test_marginals[..., channel], sample_pixels).values()][0]
-        ax[1].set_title(f'$\chi$: {ec:.4f}')
-        ec = [*get_ecs(fake_marginals[..., channel], sample_pixels).values()][0]
-        ax[2].set_title(f'$\chi$: {ec:.4f}')
-        ax[0].set_ylabel(f'Pixels: {sample_pixels[0], sample_pixels[1]}\n{channel_labels[channel]}')
+        ec = [*get_extremal_coeffs(train_marginals[..., channel], sample_pixels).values()][0]
+        ax[0].set_title(f'$\\chi_{{{sample_pixels[0], sample_pixels[1]}}}$: {2 - ec:.4f}')
+        ec = [*get_extremal_coeffs(test_marginals[..., channel], sample_pixels).values()][0]
+        ax[1].set_title(f'$\\chi_{{{sample_pixels[0], sample_pixels[1]}}}$: {2 - ec:.4f}')
+        ec = [*get_extremal_coeffs(fake_marginals[..., channel], sample_pixels).values()][0]
+        ax[2].set_title(f'$\\chi_{{{sample_pixels[0], sample_pixels[1]}}}$: {2 - ec:.4f}')
+        ax[0].set_ylabel(f'{channel_labels[channel]}')
 
         if thresh is not None:
             u = (thresh[sample_pixels[0], channel], thresh[sample_pixels[1], channel])
@@ -99,13 +101,17 @@ def compare_ecs_plot(train_marginals, test_marginals, fake_marginals, x, y, para
                 a.axhline(u[0], linestyle='dashed', color='k', label='Threshold')
                 a.axvline(u[1], linestyle='dashed', color='k')
 
-        xlim = ax[0].get_xlim()
-        ylim = ax[0].get_ylim()
+        xmin = min(ax[0].get_xlim()[0], ax[1].get_xlim()[0], ax[2].get_xlim()[0])
+        xmax = max(ax[0].get_xlim()[1], ax[1].get_xlim()[1], ax[2].get_xlim()[1])
+        ymin = min(ax[0].get_ylim()[0], ax[1].get_ylim()[0], ax[2].get_ylim()[0])
+        ymax = max(ax[0].get_ylim()[1], ax[1].get_ylim()[1], ax[2].get_ylim()[1])
+        xlim = (xmin, xmax)
+        ylim = (ymin, ymax)
 
         for a in ax:
             a.set_xlim(xlim)
             a.set_ylim(ylim)
-
+    
     axs[2, 0].set_xlabel(f'{channel_labels[channel]}\nTrain set')
     axs[2, 1].set_xlabel(f'{channel_labels[channel]}\nTest set')
     axs[2, 2].set_xlabel(f'{channel_labels[channel]}\nGenerated set')

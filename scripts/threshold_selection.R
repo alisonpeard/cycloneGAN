@@ -10,6 +10,12 @@ getmode <- function(v) {
 np <- import("numpy")
 var <- 'precip_data'
 
+if(var=='precip_data'){
+  min_quantile <- .9  # very skewed because of near-zero observations
+}else{
+  min_quantile <- .6
+}
+
 X <- np$load(paste0("/Users/alison/Documents/DPhil/multivariate/", var, "/train/images.npy"))
 M <- dim(X)[2]
 N <- dim(X)[3]
@@ -21,6 +27,8 @@ for(i in 1:M){
   for(j in 1:N){
     x <- X[, i, j, 1]
     if(var(x) > 0){
+      print(paste0("i: ", i))
+      print(paste0("j: ", j))
       npy <- 365 # observations for every day of the year
       attr(x, 'npy') <- npy
       
@@ -28,16 +36,17 @@ for(i in 1:M){
       max.allowed <- sort(x)[(length(x) - 50)]
       max.quantile <- ecdf(x)(max.allowed)
       
-      q_vec <- seq(.6, max.quantile, by=0.01)
+      q_vec <- seq(min_quantile, max.quantile, by=0.01)
       u_vec <- quantile(x, p=q_vec)
       
-      suppressWarnings({
-        var_cv <- ithresh(x, u_vec=u_vec)
-      })
+ #     suppressWarnings({
+ #       var_cv <- ithresh(x, u_vec=u_vec, trans='BC')
+ #     })
+      var_cv <- ithresh(x, u_vec=u_vec, trans='BC')
       
       best_u <- getmode(summary(var_cv)[, "best u"])
       best_u <- max(x[x <= best_u]) # use an actual observation as threshold, important for interpolating
-      
+      print(paste0('Best u: ', best_u))
       u_mat[i, j] <- best_u
       n.excesses[i, j] <- length(x[x > best_u])
     }else{
@@ -46,7 +55,7 @@ for(i in 1:M){
   }
 }
 
-np$save(paste0("/Users/alison/Documents/DPhil/multivariate/", var, "/train/thresholds.npy"), u_mat)
+np$save(paste0("/Users/alison/Documents/DPhil/multivariate/", var, "/train/pot/thresholds.npy"), u_mat)
 
 if(FALSE){
   summary(var_cv)

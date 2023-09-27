@@ -1,26 +1,32 @@
 """Helper functions for running evtGAN in TensorFlow."""
 import os
 import random
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 import warnings
-from scipy.stats import ecdf, genpareto
+from scipy.stats import ecdf, genpareto, genextreme
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
-
 SEED = 42
+
+def diff(x, d=1):
+    """Difference a (time series) array."""
+    return x[d:] - x[:-d]
 
 def translate_indices(i, dims=(18, 22)):
     indices = np.arange(0, dims[0] * dims[1], 1)
     x = np.argwhere(indices.reshape(dims[0], dims[1]) == i)
     return tuple(*map(tuple, x))
 
+
 def translate_indices_r(i, j, dims=(18, 22)):
     indices = np.arange(0, dims[0] * dims[1], 1)
     x = indices.reshape(dims[0], dims[1])[i, j]
     return x
+
 
 def tf_unpad(tensor, paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
     """Mine: remove Tensor paddings"""
@@ -43,7 +49,17 @@ def inverse_gumbel_transform(data):
     return uniform
 
 
-def probability_integral_transform(dataset, distribution="uniform", prior=None, thresholds=None, fit_tail=False):
+def probability_integral_transform(dataset, evt_type='pot', prior=None, thresholds=None, fit_tail=False, decluster=None):
+    if evt_type == 'pot':
+        return probability_integral_transform_pot(dataset, prior=prior, thresholds=thresholds, fit_tail=fit_tail, decluster=decluster)
+    elif evt_type == 'bm':
+        # NOTE: this takes a lot longer since you're fitting over ALL the data not just the excesses
+        return probability_integral_transform_bm(dataset)
+    else:
+        raise ValueError("Invalid type specified '{}'. Must be one of ['pot', 'bm']".format(evt_type))
+
+
+def probability_integral_transform_pot(dataset, prior=None, thresholds=None, fit_tail=False, decluster=None):
     """Transform data to uniform distribution using ecdf."""
     n, h, w, c = dataset.shape
     assert c == 1, "single channel only"
@@ -53,22 +69,27 @@ def probability_integral_transform(dataset, distribution="uniform", prior=None, 
         assert thresholds is not None, "Thresholds must be supplied if fitting tail."
         thresholds = thresholds.reshape(h * w)
 
-    uniform, parameters = semiparametric_cdf(dataset, prior, thresholds, fit_tail=fit_tail)
+    uniform, parameters = semiparametric_cdf(dataset, prior, thresholds, fit_tail=fit_tail, decluster=decluster)
+    uniform = uniform.reshape(n, h, w, 1)
+    parameters = parameters.reshape(h, w, 3)
+    return uniform, parameters
+
+
+def probability_integral_transform_bm(dataset):
+    """Transform data to uniform distribution using ecdf."""
+    n, h, w, c = dataset.shape
+    assert c == 1, "single channel only"
+    dataset = dataset[..., 0].reshape(n, h * w)
+
+    uniform, _ = semiparametric_cdf(dataset)  # fully parametric by default (maybe change that)
+    parameters = gev_cdf(dataset)
 
     uniform = uniform.reshape(n, h, w, 1)
     parameters = parameters.reshape(h, w, 3)
-
-    if distribution == "gumbel":
-        transformed = -np.log(-np.log(uniform))
-    elif distribution == "uniform":
-        transformed = uniform
-    else: 
-        raise ValueError("Unknown distribution: {distribution}.")
-    
-    return transformed, parameters
+    return uniform, parameters
 
 
-def semiparametric_cdf(dataset, prior=None, thresh=None, fit_tail=False):
+def semiparametric_cdf(dataset, prior=None, thresh=None, fit_tail=False, decluster=None):
     assert dataset.ndim == 2, "Requires 2 dimensions"
     x = dataset.copy()
     n, J = np.shape(x)
@@ -82,13 +103,28 @@ def semiparametric_cdf(dataset, prior=None, thresh=None, fit_tail=False):
     loc = np.empty(J)
     scale = np.empty(J)
     for j in range(J):
-        x[:, j], shape[j], loc[j], scale[j] = semiparametric_marginal_cdf(x[:, j], prior=prior, fit_tail=fit_tail, thresh=thresh[j])
+        x[:, j], shape[j], loc[j], scale[j] = semiparametric_marginal_cdf(x[:, j], prior=prior, fit_tail=fit_tail, thresh=thresh[j], decluster=decluster)
     parameters = np.stack([shape, loc, scale], axis=-1)
     return x, parameters
 
 
-def semiparametric_marginal_cdf(x, prior=None, fit_tail=False, thresh=None):
-    """Heffernan & Tawn (2004). 
+def gev_cdf(dataset):
+    assert dataset.ndim == 2, "Requires 2 dimensions"
+    x = dataset.copy()
+    n, J = np.shape(x)    
+    shape = np.empty(J)
+    loc = np.empty(J)
+    scale = np.empty(J)
+
+    for j in (pbar :=tqdm(range(J))):
+        pbar.set_description("Fitting GEV to marginals.")
+        shape[j], loc[j], scale[j] = genextreme.fit(x[:, j], method="MLE")
+    parameters = np.stack([shape, loc, scale], axis=-1)
+    return parameters
+
+
+def semiparametric_marginal_cdf(x, prior=None, fit_tail=False, thresh=None, decluster=None):
+    """§Heffernan & Tawn (2004). 
     
     Note shape parameter is opposite sign to Heffernan & Tawn (2004).
     Thresh here is a value, not a percentage."""
@@ -96,16 +132,25 @@ def semiparametric_marginal_cdf(x, prior=None, fit_tail=False, thresh=None):
     if (x.max() - x.min()) == 0.:
         return np.array([0.] * len(x)), 0, 0, 0
     
-    f = ecdf(x)
-    
+    x = x.astype(np.float64)  # otherwise f_thresh gets rounded down below f_thresh
+    f = ecdf(x).astype(np.float64)
+
     if fit_tail:
         assert thresh is not None, "Threshold must be supplied if fitting tail."
         x_tail = x[x > thresh]
         f_tail = f[x > thresh]
-        x_tail = x_tail.astype(np.float64)  # otherwise f_thresh gets rounded down below f_thresh
-        shape, loc, scale = genpareto.fit(x_tail, floc=thresh, method="MLE")
+
+        if type(decluster) == int:  # if declustering is being used
+            indices = decluster_array(x, thresh, decluster)
+            x_fitting = x[indices]
+        elif decluster is None:
+            x_fitting = x_tail
+        else:
+            raise ValueError("Invalid declustering type. Must be one of [None, int]")
+
+        shape, loc, scale = genpareto.fit(x_fitting, floc=thresh, method="MLE")
         f_thresh = np.interp(thresh, sorted(x), sorted(f))
-        f_tail = 1 - (1 - f_thresh) * (np.maximum(0, (1 - shape * (x_tail - thresh) / scale)) ** (1 / shape))  # second set of parenthesis important
+        f_tail = 1 - (1 - f_thresh) * (np.maximum(0, (1 + shape * (x_tail - thresh) / scale)) ** (-1 / shape))  # second set of parenthesis important
         assert min(f_tail) >= f_thresh, "Error in upper tail calculation."
         f[x > thresh] = f_tail
         f *= 1 - 1e-6
@@ -129,22 +174,79 @@ def rank(x):
 def ecdf(x):
     return rank(x) / (len(x) + 1)
 
-    
-def interpolate_quantiles(marginals, quantiles, n=10000):
-    """Interpolate the quantiles for inverse transformations.
-    
-    No longer using this."""
-    assert quantiles.ndim == 2, "Requires 2 dimensions"
-    interpolation_points = np.linspace(0, 1, n)
-    J = np.shape(quantiles)[1]
-    
-    interpolated_quantiles = np.empty((n, J))
-    for j in range(J):
-        interpolated_quantiles[:, j] = np.interp(interpolation_points, sorted(marginals[..., j]), sorted(quantiles[..., j]))
-    return interpolated_quantiles
+
+def decluster_array(x:np.array, thresh:float, r:int):
+    if r is None:
+        return np.where(x > thresh)[0]
+    exceedences = x > thresh
+    clusters = identify_clusters(exceedences, r)
+    cluster_maxima = []
+    for cluster in clusters:
+        argmax = cluster[np.argmax(x[cluster])]
+        cluster_maxima.append(argmax)   
+    return cluster_maxima
 
 
-def inv_probability_integral_transform(marginals, x, y, params=None, thresh=None):
+def identify_clusters(x:np.array, r:int):
+    clusters = []
+    cluster_no = 0
+    clusters.append([])
+    false_counts = 0
+    for i, val in enumerate(x):
+        if false_counts == r:
+            clusters.append([])
+            cluster_no += 1
+            false_counts = 0
+        if val:
+            clusters[cluster_no].append(i)
+        else:
+            false_counts += 1
+    clusters = [cluster for cluster in clusters if len(cluster) > 0]
+    return clusters
+
+    
+# def interpolate_quantiles(marginals, quantiles, n=10000):
+#     """Interpolate the quantiles for inverse transformations.
+    
+#     No longer using this."""
+#     assert quantiles.ndim == 2, "Requires 2 dimensions"
+#     interpolation_points = np.linspace(0, 1, n)
+#     J = np.shape(quantiles)[1]
+    
+#     interpolated_quantiles = np.empty((n, J))
+#     for j in range(J):
+#         interpolated_quantiles[:, j] = np.interp(interpolation_points, sorted(marginals[..., j]), sorted(quantiles[..., j]))
+#     return interpolated_quantiles
+
+
+def inv_probability_integral_transform(marginals, x=None, y=None, params=None, evt_type='pot', thresh=None):
+    if evt_type == 'pot':
+        return inv_probability_integral_transform_pot(marginals, x, y, params, thresh)
+    elif evt_type == "bm":
+        return inv_probability_integral_transform_bm(marginals, params)
+    else:
+        raise ValueError("Unknown evt_type '{}'".format(evt_type))
+
+
+def inv_probability_integral_transform_bm(marginals, params):
+    """Transform uniform marginals to original distributions, using quantile function of GEV."""
+    assert marginals.ndim == 4, "Function takes rank 4 arrays"
+    n, h, w, c = marginals.shape
+    marginals = marginals.reshape(n, h * w, c)
+    assert params.shape == (h, w, 3, c), "Marginals and parameters have different dimensions."
+    params = params.reshape(h * w, 3, c)
+    
+    quantiles = []
+    for channel in range(c):
+        q = np.array([genextreme.ppf(marginals[:, j, channel], *params[j, ..., channel]) for j in range(h * w)]).T
+        quantiles.append(q)
+    
+    quantiles = np.stack(quantiles, axis=-1)
+    quantiles = quantiles.reshape(n, h, w, c)
+    return quantiles
+
+
+def inv_probability_integral_transform_pot(marginals, x, y, params=None, thresh=None):
     """Transform uniform marginals to original distributions, by inverse-interpolating ecdf."""
     assert marginals.ndim == 4, "Function takes rank 4 arrays"
     n, h, w, c = marginals.shape
@@ -187,23 +289,28 @@ def empirical_quantile(marginals, x, y, params=None, thresh=None):
     n = len(x)
     x = sorted(x)
 
-    if (marginals.max() - marginals.min()) == 0.: # all identical pixels
-        return np.array([-999] * len(marginals))
+    if (marginals.max() - marginals.min()) == 0.:
+        return np.array([-999] * len(marginals)) # no data proxy
 
     if marginals.max() >= 1:
         warnings.warn("Some marginals >= 1.")
         marginals *= 1 - 1e-6
+    
     quantiles = np.interp(marginals, sorted(y), sorted(x))
     if params is not None:
         f_thresh = np.interp(thresh, sorted(x), sorted(y))
-        if len(quantiles[marginals <= f_thresh]) > 0:
-            u_x = quantiles[marginals <= f_thresh].max()
-        else:  # just a catch for mad marginals, but shouldn't happen
-            warnings.warn("All marginals above u_x.")
-            u_x = quantiles.min()
+
+        # Think I can delete this (20-09-2023)?
+        # if len(quantiles[marginals <= f_thresh]) > 0:
+        #     u_x = quantiles[marginals <= f_thresh].max()
+        # else:  # just a catch for mad marginals, but shouldn't happen
+        #     warnings.warn("All marginals above u_x.")
+        #     u_x = quantiles.min()
+        
         marginals_tail = marginals[marginals > f_thresh]
-        quantiles_tail = upper_ppf(marginals_tail, u_x, f_thresh, params)
+        quantiles_tail = upper_ppf(marginals_tail, thresh, f_thresh, params)
         quantiles[marginals > f_thresh] = quantiles_tail
+    
     return quantiles
 
 
@@ -213,24 +320,57 @@ def upper_ppf(marginals, u_x, thresh, params):
     x = u_x + (scale / shape) * (1 - ((1 - marginals) / (1 - thresh))**shape)
     return x
 
-def get_kl_dissimilarity(marginals, sample_indices, thresholds):
-    """Vignotto (2021) §2.3"""
-    # TODO: finish this
-    assert len(sample_indices) == 2, "Can only be calculated for bivariate data."
-    n, h, w, c = marginals.shape
-    marginals = marginals.reshape(n, h * w, c)
-    thresholds = thresholds.reshape(h * w, c)
-    for channel in range(c):
-        for j in sample_indices:
-            marginals_cj = marginals[:, j, channel]
-            thresh_cj = thresholds[j, channel]
-            marginals_cj = marginals_cj[marginals_cj > thresh_cj]
 
-            pareto = 1 / (1 - marginals_cj)
-    pass
+# def get_kl_dissimilarity(marginals, sample_indices, thresholds):
+#     """Vignotto (2021) §2.3"""
+#     # TODO: finish this
+#     assert len(sample_indices) == 2, "Can only be calculated for bivariate data."
+#     n, h, w, c = marginals.shape
+#     marginals = marginals.reshape(n, h * w, c)
+#     thresholds = thresholds.reshape(h * w, c)
+#     for channel in range(c):
+#         for j in sample_indices:
+#             marginals_cj = marginals[:, j, channel]
+#             thresh_cj = thresholds[j, channel]
+#             marginals_cj = marginals_cj[marginals_cj > thresh_cj]
+#             pareto = 1 / (1 - marginals_cj)
+#     pass
 
 
-def get_ecs(marginals, sample_inds):
+# def get_fmadograms(marginals, first, second):
+#     """Davison (2012) Statistical Modeling of Spatial Extremes 2.4.
+    
+#     Taking way too long."""
+#     data = tf.cast(marginals, dtype=tf.float32)
+#     n, h, w = tf.shape(data)[:3]
+#     data = tf.reshape(data, [n, h * w])
+#     frechet = tf_inv_frechet(data)
+
+#     fmadograms = {}
+#     for i, j in zip(first, second):
+#         coef = raw_extremal_coefficient(frechet[:, i], frechet[:, j]).numpy()
+#         fmadograms[i, j] = 0.5 * (coef - 1) / (coef + 1)
+
+#     return fmadograms
+
+
+# def get_fmadograms(marginals, dmat, nbins):
+#     """Cooley (2006) 2.3."""
+#     # get distance matrix
+#     # iterate over binned distances
+#     # sum absolute difference between all pairs of points for each bin
+#     # divid by number of points in each bin
+#     # return bins and corresponding nu-values
+#     pass
+
+
+def get_extremal_correlations(marginals, sample_inds):
+    coeffs = get_extremal_coeffs(marginals, sample_inds)
+    coors = {indices: 2 - coef for indices, coef in coeffs.items()}
+    return coors
+
+
+def get_extremal_coeffs(marginals, sample_inds):
     data = tf.cast(marginals, dtype=tf.float32)
     n, h, w = tf.shape(data)[:3]
     data = tf.reshape(data, [n, h * w])
@@ -239,7 +379,7 @@ def get_ecs(marginals, sample_inds):
     ecs = {}
     for i in range(len(sample_inds)):
         for j in range(i):
-            ecs[sample_inds[i], sample_inds[j]] = raw_extremal_correlation(frechet[:, i], frechet[:, j]).numpy()
+            ecs[sample_inds[i], sample_inds[j]] = raw_extremal_coefficient(frechet[:, i], frechet[:, j]).numpy()
     return ecs
 
 
@@ -253,10 +393,10 @@ def tf_inv_frechet(uniform):
     return exp_distributed
 
 
-def raw_extremal_correlation(frechet_x, frechet_y):
+def raw_extremal_coefficient(frechet_x, frechet_y):
     """Where x and y have been transformed to their Fréchet marginal distributions.
 
-    ..[1] Max-stable process and spatial extremes, Smith (1990)
+    ..[1] Max-stable process and spatial extremes, Smith (1990) §4
     """
     n = tf.shape(frechet_x)[0]
     assert n == tf.shape(frechet_y)[0]
@@ -267,6 +407,29 @@ def raw_extremal_correlation(frechet_x, frechet_y):
     else:
         tf.print("Warning: all zeros in minima array.")
         theta = 2
+    return theta
+
+
+def get_extremal_coeffs_nd(marginals, sample_inds):
+    """Calculate extremal coefficients across D-dimensional data."""
+    n, h, w, d = marginals.shape
+    data = marginals.reshape(n, h * w, d)
+    data = data[:, sample_inds, :]
+    frechet = tf_inv_frechet(data)
+    ecs = {}
+    for i in range(len(sample_inds)):
+        ecs[sample_inds[i]] = raw_extremal_coeff_nd(frechet[:, i, :])
+    return ecs
+
+
+def raw_extremal_coeff_nd(frechets):
+    n, d = frechets.shape
+    minima = np.sum(np.min(frechets, axis=1)) # minimum for each row
+    if minima > 0:
+        theta = n / minima
+    else:
+        print("Warning: all zeros in minima array.")
+        theta = d
     return theta
 
 
@@ -303,6 +466,7 @@ def interpolate_thresholds(thresholds, x, y):
     return f_thresholds
 
 
+
 ########################################################################################################
 def load_data(datadir, imsize=(18, 22), conditions='all', dim=None):
     """Load wind image data to correct size."""
@@ -321,44 +485,49 @@ def load_data(datadir, imsize=(18, 22), conditions='all', dim=None):
     return data.numpy(), cyclone_flag
 
 
-def load_training_data(datadir, train_size=200, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
+def load_training_data(datadir, train_size=200, datas=['wind_data', 'wave_data', 'precip_data'],
+                       evt_type='pot', paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
     marginals = []
     images = []
     params = []
-    thresholds = []
     for data in datas:
-        marginals.append(np.load(os.path.join(datadir, data, 'train', 'marginals.npy'))[..., 0])
-        params.append(np.load(os.path.join(datadir, data, 'train', 'params.npy')))
-        images.append(np.load(os.path.join(datadir, data, 'train', 'images.npy'))[..., 0])
-        thresholds.append(np.load(os.path.join(datadir, data, 'train', 'thresholds.npy')))
+        marginals.append(np.load(os.path.join(datadir, data, 'train', evt_type, 'marginals.npy'))[..., 0])
+        params.append(np.load(os.path.join(datadir, data, 'train', evt_type, 'params.npy')))
+        images.append(np.load(os.path.join(datadir, data, 'train', evt_type, 'images.npy'))[..., 0])
 
     marginals = np.stack(marginals, axis=-1)
     params = np.stack(params, axis=-1)
     images = np.stack(images, axis=-1)
-    thresholds = np.stack(thresholds, axis=-1)
-
-    # paddings
     marginals = tf.pad(marginals, paddings)
 
     # train/valid split
     np.random.seed(2)
     train_inds = np.random.choice(np.arange(0, marginals.shape[0], 1), size=train_size, replace=False)
-
     marginals_train = np.take(marginals, train_inds, axis=0)
     marginals_test = np.delete(marginals, train_inds, axis=0)
     images = np.take(images, train_inds, axis=0)
+
+    if evt_type == "pot":
+        thresholds = []
+        for data in datas:
+            thresholds.append(np.load(os.path.join(datadir, data, 'train', evt_type, 'thresholds.npy')))
+        thresholds = np.stack(thresholds, axis=-1)
+    else:
+        thresholds = None
+
     return marginals_train, marginals_test, params, images, thresholds
 
 
-def load_test_data(datadir, datas=['wind_data', 'wave_data', 'precip_data'], paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
+def load_test_data(datadir, datas=['wind_data', 'wave_data', 'precip_data'],
+                   evt_type='pot', paddings=tf.constant([[0,0], [1,1], [1,1], [0,0]])):
     marginals = []
     images = []
     params = []
 
     for data in datas:
-        marginals.append(np.load(os.path.join(datadir, data, 'test', 'marginals.npy'))[..., 0])
-        params.append(np.load(os.path.join(datadir, data, 'train', 'params.npy'))) # params from training set
-        images.append(np.load(os.path.join(datadir, data, 'test', 'images.npy'))[..., 0])
+        marginals.append(np.load(os.path.join(datadir, data, 'test', evt_type, 'marginals.npy'))[..., 0])
+        params.append(np.load(os.path.join(datadir, data, 'train', evt_type, 'params.npy'))) # params from training set
+        images.append(np.load(os.path.join(datadir, data, 'test', evt_type, 'images.npy'))[..., 0])
 
     marginals = np.stack(marginals, axis=-1)
     params = np.stack(params, axis=-1)
